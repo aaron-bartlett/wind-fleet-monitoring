@@ -258,3 +258,12 @@ TIME_WINDOWS: dict[str, timedelta | None] = {
     "7d": timedelta(days=7),
     "all": None,
 }
+
+# --------------------------------------------------------------------------------------
+# NWP provider (PROJECT_SPEC.md §9)
+# --------------------------------------------------------------------------------------
+
+# "stub" (default, v1) or "hrrr" (ToDo skeleton, raises NotImplementedError) — see src/domain/nwp.py.
+NWP_PROVIDER: str = os.environ.get("NWP_PROVIDER", "stub")
+NWP_GRID_RESOLUTION = 12  # points per axis for StubNWPProvider.grid()
+NWP_STUB_SEED = 20260101
