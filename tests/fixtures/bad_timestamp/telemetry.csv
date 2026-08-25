@@ -1,0 +1,3 @@
+turbine_id,farm_id,timestamp,received_at,power_output_kw,wind_speed_ms,rotor_rpm,blade_pitch_deg,gearbox_temp_c
+TURB001,FARM01,2026-01-01T00:00:00Z,2026-01-01T00:02:00Z,2100.0,7.5,13.5,4.0,80.0
+TURB001,FARM01,not-a-timestamp,2026-01-01T00:07:00Z,2050.0,7.3,13.2,4.1,79.5

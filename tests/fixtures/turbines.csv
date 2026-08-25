@@ -1,0 +1,5 @@
+turbine_id,farm_id,farm_name,latitude,longitude
+TURB001,FARM01,Prairie Ridge,41.263,-96.518
+TURB002,FARM01,Prairie Ridge,41.271,-96.505
+TURB003,FARM02,High Plains,39.741,-101.207
+TURB999,FARM02,High Plains,39.755,-101.198
