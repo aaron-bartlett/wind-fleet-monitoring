@@ -221,9 +221,14 @@ MOBILE_BREAKPOINT_PX = 768
 ZERO_SPAN_PAD_DEG = 0.05  # Bounds.expanded() fallback when all points share a coordinate
 
 # Conservative, fixed panel-size estimates for `fit_bounds` padding (PROJECT_SPEC.md §10.1
-# rules out live JS viewport measurement) — src/ui/layout.py's viewport_padding().
+# rules out live JS viewport measurement) — src/ui/layout.py's viewport_padding(). Each is
+# `DASHBOARD_FRACTION` of the reference viewport `IMPLEMENTATION_PLAN.md` Phase 15's manual
+# check verifies against: 1440x900 desktop (1440 / 3 = 480) and 390x844 mobile (844 / 3 = 281.3,
+# rounded up). A prior value of 260 here under-padded the 390x844 case by ~21px, letting markers
+# render just inside the bottom panel; 282 covers it with the same exact-reference-viewport
+# derivation as the desktop constant, plus a few pixels of headroom for slightly taller phones.
 DESKTOP_PANEL_PX = 480
-MOBILE_PANEL_PX = 260
+MOBILE_PANEL_PX = 282
 
 # SPEC-GAP: `st_folium`'s `height` parameter is a fixed pixel int (streamlit-folium has no
 # `vh`/percentage support), so "the map fills the viewport" (PROJECT_SPEC.md §8.1) is
@@ -271,6 +276,12 @@ MAX_TIMESERIES_POINTS = 2000
 MAX_SCATTER_POINTS = 5000
 TELEMETRY_INTERVAL_MINUTES = 5
 BUCKET_BY_WINDOW: dict[str, str] = {"24h": "5 minutes", "7d": "1 hour", "all": "6 hours"}
+
+# `@st.cache_data` TTL (seconds) for the UI-layer wrappers around the fleet-scale aggregate
+# builders (`IMPLEMENTATION_PLAN.md` Phase 15; `app.py`) — long enough that a burst of reruns
+# from panning/zooming/toggling a checkbox within one drill-down session doesn't recompute the
+# roll-up, short enough that the map still reflects a `SIM_NOW`/dataset change within a session.
+CACHE_TTL_SECONDS = 300
 
 # --------------------------------------------------------------------------------------
 # Time windows

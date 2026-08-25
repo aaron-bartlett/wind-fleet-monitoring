@@ -16,7 +16,7 @@ from streamlit_folium import st_folium
 import config
 from src.data import db
 from src.domain import aggregates, clock, geo, nwp
-from src.domain.models import Bounds, GridField, Level
+from src.domain.models import Bounds, GridField, HealthResult, Level, Turbine
 from src.errors import WindFleetError
 from src.ui import layout, map_view, state
 from src.ui.dashboards import farm as farm_dashboard
@@ -74,6 +74,38 @@ def _render_ingest_summary() -> None:
         st.write(f"Rows with nulls: {summary.rows_with_nulls}")
         st.write(f"Telemetry range: {summary.telemetry_start} — {summary.telemetry_end}")
         st.write(f"Elapsed: {summary.elapsed_seconds:.3f}s")
+
+
+@st.cache_data(ttl=config.CACHE_TTL_SECONDS)
+def _cached_farm_map_rows(
+    _con: duckdb.DuckDBPyConnection, _settings: config.Settings, now: datetime
+) -> list[aggregates.FarmMapRow]:
+    """Cache `aggregates.build_farm_map_rows` in the UI layer (`CLAUDE.md` §5.4).
+
+    This fleet-wide roll-up runs on every rerender of the fleet map — including pans, zooms,
+    and layer-checkbox toggles that don't change the underlying data — so caching it here keeps
+    those reruns cheap without touching `src/domain/`. `_con`/`_settings` are prefixed with an
+    underscore so Streamlit excludes them from the cache key (a DuckDB connection has no stable
+    hash, and `settings` is effectively constant for the process lifetime); `now` alone already
+    invalidates the cache whenever the dataset's resolved "now" moves.
+
+    Args:
+        _con: Open DuckDB connection (excluded from the cache key).
+        _settings: Runtime settings (excluded from the cache key).
+        now: The resolved "now" (`clock.get_now`) — the cache key.
+
+    Returns:
+        One `FarmMapRow` per farm, per `aggregates.build_farm_map_rows`.
+    """
+    return aggregates.build_farm_map_rows(_con, _settings, now)
+
+
+@st.cache_data(ttl=config.CACHE_TTL_SECONDS)
+def _cached_turbine_map_rows(
+    _con: duckdb.DuckDBPyConnection, _settings: config.Settings, now: datetime, farm_id: str
+) -> list[tuple[Turbine, HealthResult]]:
+    """Cache `aggregates.build_turbine_map_rows`, keyed on `farm_id` and `now` (see above)."""
+    return aggregates.build_turbine_map_rows(_con, _settings, now, farm_id)
 
 
 def _render_map_controls(now: datetime, bounds: Bounds) -> dict[str, GridField]:
@@ -162,7 +194,7 @@ def _render_map(con: duckdb.DuckDBPyConnection, settings: config.Settings, now: 
         settings: Runtime settings (staleness threshold).
         now: The resolved "now" (`clock.get_now`).
     """
-    farm_rows = aggregates.build_farm_map_rows(con, settings, now)
+    farm_rows = _cached_farm_map_rows(con, settings, now)
     level = state.get_level()
     selected_farm_id = state.get_selected_farm_id()
     selected_farm_row = next(
@@ -174,9 +206,7 @@ def _render_map(con: duckdb.DuckDBPyConnection, settings: config.Settings, now: 
         turbine_rows = None
     else:
         bounds = geo.farm_view_bounds(con, selected_farm_row.farm.farm_id, selected_farm_row.farm)
-        turbine_rows = aggregates.build_turbine_map_rows(
-            con, settings, now, selected_farm_row.farm.farm_id
-        )
+        turbine_rows = _cached_turbine_map_rows(con, settings, now, selected_farm_row.farm.farm_id)
 
     if bounds is None:
         # Not one of PROJECT_SPEC.md §11's enumerated bad-data cases, but the same principle:
