@@ -30,7 +30,11 @@ module = ["src.domain.*", "src.data.*"]
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["folium.*", "streamlit_folium.*", "branca.*", "timezonefinder.*", "plotly.*"]
+# `scipy` (pinned ~=1.14 in requirements.txt, used by src/ui/charts.py for OLS regression,
+# PROJECT_SPEC.md §2) ships no `py.typed` marker in this pin and CLAUDE.md §2.3 does not list
+# a `scipy-stubs` dev dependency, so it is treated the same as the other untyped third-party
+# UI dependencies already listed here (CLAUDE.md §3.3 escape hatch).
+module = ["folium.*", "streamlit_folium.*", "branca.*", "timezonefinder.*", "plotly.*", "scipy.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

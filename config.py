@@ -220,6 +220,11 @@ DASHBOARD_FRACTION = 1 / 3
 MOBILE_BREAKPOINT_PX = 768
 ZERO_SPAN_PAD_DEG = 0.05  # Bounds.expanded() fallback when all points share a coordinate
 
+# Conservative, fixed panel-size estimates for `fit_bounds` padding (PROJECT_SPEC.md §10.1
+# rules out live JS viewport measurement) — src/ui/layout.py's viewport_padding().
+DESKTOP_PANEL_PX = 480
+MOBILE_PANEL_PX = 260
+
 # 16-point compass abbreviations, indexed by 22.5°-wide sector (0 = N, 4 = E, ...).
 COMPASS_POINTS: tuple[str, ...] = (
     "N",
@@ -267,3 +272,19 @@ TIME_WINDOWS: dict[str, timedelta | None] = {
 NWP_PROVIDER: str = os.environ.get("NWP_PROVIDER", "stub")
 NWP_GRID_RESOLUTION = 12  # points per axis for StubNWPProvider.grid()
 NWP_STUB_SEED = 20260101
+
+# --------------------------------------------------------------------------------------
+# Charts (src/ui/charts.py)
+# --------------------------------------------------------------------------------------
+
+CHART_HEIGHT_PX = 260
+PLOTLY_TEMPLATE = "plotly_white"
+CHART_MARGIN: dict[str, int] = {"l": 40, "r": 20, "t": 40, "b": 40}
+
+# Wind rose petal colors (PROJECT_SPEC.md §10.3): previous 24h drawn first in gray, the
+# current hour drawn on top in the accent color.
+WIND_ROSE_HISTORY_COLOR = "#BDBDBD"
+WIND_ROSE_CURRENT_COLOR = "#1565C0"
+
+# Below this many (x, y) pairs an OLS fit is not meaningful; render "Insufficient data" instead.
+SCATTER_MIN_REGRESSION_POINTS = 3

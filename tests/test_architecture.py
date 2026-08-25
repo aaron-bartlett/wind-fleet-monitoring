@@ -1,7 +1,8 @@
-"""Enforces the layering rule in CLAUDE.md §4.1: `src/domain/` and `src/data/` must never
-import Streamlit-or-rendering-related packages, and must never embed raw SQL outside the two
-modules designated to hold it. This keeps business logic unit-testable without a Streamlit
-runtime.
+"""Enforces the layering rules in CLAUDE.md §4.1 and §5.1: `src/domain/` and `src/data/` must
+never import Streamlit-or-rendering-related packages and must never embed raw SQL outside the
+two modules designated to hold it, and `st.session_state` must never be touched outside
+`src/ui/state.py`. This keeps business logic unit-testable without a Streamlit runtime and
+keeps every state mutation behind one typed surface.
 """
 
 import ast
@@ -11,6 +12,7 @@ FORBIDDEN_MODULES = {"streamlit", "folium", "streamlit_folium", "branca", "plotl
 LAYER_DIRS = ("src/domain", "src/data")
 SQL_ALLOWED_FILES = {"src/data/queries.py", "src/data/db.py"}
 SQL_SUBSTRINGS = ("select ", "insert ", "create table")
+SESSION_STATE_ALLOWED_FILE = "src/ui/state.py"
 
 
 def _iter_py_files() -> list[Path]:
@@ -57,3 +59,17 @@ def test_domain_and_data_have_no_raw_sql_outside_designated_files() -> None:
                 f"{relative_path} contains raw SQL substring {substring!r}; "
                 f"all SQL must live in src/data/queries.py or src/data/db.py."
             )
+
+
+def test_only_state_module_touches_session_state() -> None:
+    """`src/ui/state.py` must be the only file referencing `st.session_state` (CLAUDE.md §5.1)."""
+    repo_root = Path(__file__).parent.parent
+    candidates = [*sorted((repo_root / "src").rglob("*.py")), repo_root / "app.py"]
+    for path in candidates:
+        relative_path = path.relative_to(repo_root).as_posix()
+        if relative_path == SESSION_STATE_ALLOWED_FILE:
+            continue
+        assert "session_state" not in path.read_text(), (
+            f"{relative_path} references session_state; only {SESSION_STATE_ALLOWED_FILE} "
+            f"may touch st.session_state — route this through src/ui/state.py instead."
+        )
