@@ -1,0 +1,24 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.11.8, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/aaron/Documents/NextEra-Technical/Software_Take_Home_Exercise/wind-fleet-monitor
+configfile: pyproject.toml
+plugins: cov-6.3.0, anyio-4.14.2
+collected 79 items
+
+tests/test_health.py ................................................... [ 64%]
+............................/Users/aaron/Documents/NextEra-Technical/Software_Take_Home_Exercise/wind-fleet-monitor/.venv/lib/python3.11/site-packages/coverage/inorout.py:558: CoverageWarning: Module src/domain/health was never imported. (module-not-imported); see https://coverage.readthedocs.io/en/7.15.4/messages.html#warning-module-not-imported
+  self.warn(f"Module {pkg} was never imported.", slug="module-not-imported")
+/Users/aaron/Documents/NextEra-Technical/Software_Take_Home_Exercise/wind-fleet-monitor/.venv/lib/python3.11/site-packages/coverage/control.py:963: CoverageWarning: No data was collected. (no-data-collected); see https://coverage.readthedocs.io/en/7.15.4/messages.html#warning-no-data-collected
+  self._warn("No data was collected.", slug="no-data-collected")
+/Users/aaron/Documents/NextEra-Technical/Software_Take_Home_Exercise/wind-fleet-monitor/.venv/lib/python3.11/site-packages/pytest_cov/plugin.py:372: CovReportWarning: Failed to generate report: No data to report.
+
+  warnings.warn(CovReportWarning(message), stacklevel=1)
+
+WARNING: Failed to generate report: No data to report.
+
+                                                                         [100%]
+
+================================ tests coverage ================================
+_______________ coverage: platform darwin, python 3.11.8-final-0 _______________
+
+============================== 79 passed in 0.68s ==============================
