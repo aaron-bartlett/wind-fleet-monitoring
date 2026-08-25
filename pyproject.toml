@@ -12,6 +12,13 @@ extend-exclude = ["*.md"]
 select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "ARG", "PTH", "RUF"]
 ignore = ["E501"]  # formatter owns line length
 
+[tool.ruff.lint.per-file-ignores]
+# IMPLEMENTATION_PLAN.md Phase 1 names this function POWER_CURVE_EXPECTED_KW to read as
+# the module's other named curve/constant, POWER_CURVE (PROJECT_SPEC.md §6.2). N802
+# (function names must be lowercase) is disabled for config.py alone rather than inline
+# per-call, per CLAUDE.md §3.3's "change pyproject.toml and say so" escape hatch.
+"config.py" = ["N802"]
+
 [tool.mypy]
 python_version = "3.11"
 warn_return_any = true
