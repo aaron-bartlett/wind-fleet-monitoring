@@ -218,6 +218,27 @@ BOUNDS_EXPANSION = 1.10
 SINGLE_POINT_ZOOM = 13
 DASHBOARD_FRACTION = 1 / 3
 MOBILE_BREAKPOINT_PX = 768
+ZERO_SPAN_PAD_DEG = 0.05  # Bounds.expanded() fallback when all points share a coordinate
+
+# 16-point compass abbreviations, indexed by 22.5°-wide sector (0 = N, 4 = E, ...).
+COMPASS_POINTS: tuple[str, ...] = (
+    "N",
+    "NNE",
+    "NE",
+    "ENE",
+    "E",
+    "ESE",
+    "SE",
+    "SSE",
+    "S",
+    "SSW",
+    "SW",
+    "WSW",
+    "W",
+    "WNW",
+    "NW",
+    "NNW",
+)
 
 # --------------------------------------------------------------------------------------
 # Performance caps (PROJECT_SPEC.md §12)
