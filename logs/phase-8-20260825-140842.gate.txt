@@ -1,0 +1,16 @@
+### ruff format --check .
+27 files already formatted
+exit=0
+### ruff check .
+All checks passed!
+exit=0
+### mypy src app.py
+Found 1 error in 1 file (errors prevented further checking)
+pyproject.toml: note: unused section(s): module = ['branca.*', 'folium.*', 'plotly.*', 'streamlit_folium.*']
+Success: no issues found in 14 source files
+exit=0
+### pytest
+........................................................................ [ 40%]
+........................................................................ [ 80%]
+..................................                                       [100%]
+exit=0

@@ -1,0 +1,1 @@
+deterministic OK: PointForecast(valid_time=datetime.datetime(2026, 1, 2, 12, 0, tzinfo=datetime.timezone.utc), wind_speed_ms=10.550237812479299, wind_direction_deg=278.14766295115834, air_temp_c=10.623467363184721, is_simulated=True)
