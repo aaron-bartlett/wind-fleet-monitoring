@@ -282,6 +282,14 @@ TIME_WINDOWS: dict[str, timedelta | None] = {
     "all": None,
 }
 
+# Display labels for the Turbine Dashboard's time-window dropdown (src/ui/dashboards/turbine.py,
+# PROJECT_SPEC.md §10.4). Keys match TIME_WINDOWS/state.history_window exactly.
+HISTORY_WINDOW_LABELS: dict[str, str] = {
+    "24h": "24 Hours",
+    "7d": "7 Days",
+    "all": "Full History",
+}
+
 # --------------------------------------------------------------------------------------
 # NWP provider (PROJECT_SPEC.md §9)
 # --------------------------------------------------------------------------------------
@@ -322,3 +330,26 @@ KW_PER_MW = 1000.0
 # Air temperature is displayed in °C with °F alongside it: F = C * FAHRENHEIT_SCALE + FAHRENHEIT_OFFSET.
 FAHRENHEIT_SCALE = 9 / 5
 FAHRENHEIT_OFFSET = 32.0
+
+# --------------------------------------------------------------------------------------
+# Map layer overlays (src/ui/map_view.py, app.py, PROJECT_SPEC.md §8.4)
+# --------------------------------------------------------------------------------------
+
+MAP_LAYER_OVERLAY_OPACITY = 0.5
+
+# Sequential single-hue "blue" ramp (light -> dark; the dataviz skill's validated reference
+# palette for continuous magnitude). Reused as-is for both wind and temperature so the two
+# grid overlays read as one consistent visual language instead of each inventing its own
+# gradient, and so neither ever becomes a rainbow.
+GRID_OVERLAY_COLORMAP_STOPS = ["#cde2fb", "#6da7ec", "#256abf", "#0d366b"]
+
+MAP_LAYER_SIMULATED_CAPTION = "Simulated data — NWP provider not connected"
+
+MAP_CONTROLS_LABELS: dict[str, str] = {
+    "wind": "Wind streams",
+    "temperature": "Temperature",
+    "forecast": "Forecasted power output",
+}
+
+# Quoted verbatim from PROJECT_SPEC.md §8.4 so the checkbox's placeholder text can't drift.
+FORECAST_TODO_MESSAGE = "Power output forecasting is not yet implemented. See PROJECT_SPEC.md §8.4."

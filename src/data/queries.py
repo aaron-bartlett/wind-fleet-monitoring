@@ -411,6 +411,30 @@ def get_current_power_kw(
     return float(row[0])
 
 
+def _scatter_where(
+    *, turbine_id: str, x_metric: str, y_metric: str, start: datetime | None, end: datetime
+) -> tuple[str, list[object]]:
+    """Build the shared `WHERE` clause + bind params for `get_scatter_data`/`get_scatter_sample_size`.
+
+    Raises:
+        QueryError: `x_metric` or `y_metric` is not a recognized metric name.
+    """
+    _validate_metric(x_metric)
+    _validate_metric(y_metric)
+
+    start_clause = "timestamp >= ? AND " if start is not None else ""
+    params: list[object] = [turbine_id]
+    if start is not None:
+        params.append(start)
+    params.append(end)
+
+    where_clause = (
+        f"turbine_id = ? AND {x_metric} IS NOT NULL AND {y_metric} IS NOT NULL "
+        f"AND {start_clause}timestamp <= ?"
+    )
+    return where_clause, params
+
+
 def get_scatter_data(
     con: duckdb.DuckDBPyConnection,
     *,
@@ -442,18 +466,8 @@ def get_scatter_data(
     Raises:
         QueryError: `x_metric` or `y_metric` is not a recognized metric name.
     """
-    _validate_metric(x_metric)
-    _validate_metric(y_metric)
-
-    start_clause = "timestamp >= ? AND " if start is not None else ""
-    filter_params: list[object] = [turbine_id]
-    if start is not None:
-        filter_params.append(start)
-    filter_params.append(end)
-
-    where_clause = (
-        f"turbine_id = ? AND {x_metric} IS NOT NULL AND {y_metric} IS NOT NULL "
-        f"AND {start_clause}timestamp <= ?"
+    where_clause, filter_params = _scatter_where(
+        turbine_id=turbine_id, x_metric=x_metric, y_metric=y_metric, start=start, end=end
     )
 
     total = _scalar_count(con, where_clause, filter_params)
@@ -467,6 +481,42 @@ def get_scatter_data(
         ") SELECT x, y FROM ranked WHERE rn % CAST(? AS BIGINT) = 0 ORDER BY rn"
     )
     return _fetchdf(con, sql, [*filter_params, stride], "get_scatter_data")
+
+
+def get_scatter_sample_size(
+    con: duckdb.DuckDBPyConnection,
+    *,
+    turbine_id: str,
+    x_metric: str,
+    y_metric: str,
+    start: datetime | None,
+    end: datetime,
+) -> int:
+    """Return the pre-sample row count `get_scatter_data` would down-sample from.
+
+    Lets a caller (the Turbine Dashboard's historical scatter, `PROJECT_SPEC.md` §10.4) pass an
+    honest `sampled_from` to `charts.build_scatter_with_regression` — never silently truncating.
+    Shares `get_scatter_data`'s exact filter (same metrics, window, and NULL exclusion) so the
+    two counts are always comparable.
+
+    Args:
+        con: Open DuckDB connection.
+        turbine_id: The turbine to read.
+        x_metric: One of `config.METRICS`.
+        y_metric: One of `config.METRICS`.
+        start: Window start; `None` means no lower bound.
+        end: Window end (inclusive).
+
+    Returns:
+        The number of rows matching the filter, before any down-sampling.
+
+    Raises:
+        QueryError: `x_metric` or `y_metric` is not a recognized metric name.
+    """
+    where_clause, filter_params = _scatter_where(
+        turbine_id=turbine_id, x_metric=x_metric, y_metric=y_metric, start=start, end=end
+    )
+    return _scalar_count(con, where_clause, filter_params)
 
 
 def _scalar_count(con: duckdb.DuckDBPyConnection, where_clause: str, params: Params) -> int:

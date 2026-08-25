@@ -2,12 +2,12 @@
 
 Connects to DuckDB, resolves "now", injects CSS, initializes session state, and renders the
 map/dashboard shell: the fleet map, farm drill-down and turbine layer (`src/ui/map_view.py`),
-and the Fleet/Farm Dashboards (`src/ui/dashboards/`) as of Phase 12. The Turbine Dashboard
-arrives in Phase 13; until then, selecting a turbine keeps the Farm Dashboard on screen.
+and the Fleet/Farm/Turbine Dashboards (`src/ui/dashboards/`).
 """
 
 import logging
 from datetime import datetime
+from typing import Literal
 
 import duckdb
 import streamlit as st
@@ -15,12 +15,13 @@ from streamlit_folium import st_folium
 
 import config
 from src.data import db
-from src.domain import aggregates, clock, geo
-from src.domain.models import Level
+from src.domain import aggregates, clock, geo, nwp
+from src.domain.models import Bounds, GridField, Level
 from src.errors import WindFleetError
 from src.ui import layout, map_view, state
 from src.ui.dashboards import farm as farm_dashboard
 from src.ui.dashboards import fleet as fleet_dashboard
+from src.ui.dashboards import turbine as turbine_dashboard
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -75,6 +76,84 @@ def _render_ingest_summary() -> None:
         st.write(f"Elapsed: {summary.elapsed_seconds:.3f}s")
 
 
+def _render_map_controls(now: datetime, bounds: Bounds) -> dict[str, GridField]:
+    """Render the top-right Wind / Temperature / Forecast layer checkboxes (`PROJECT_SPEC.md` §8.4).
+
+    Checking Wind or Temperature lazily fetches a synthetic grid from the NWP provider and
+    caches it via `state.set_nwp_cached`; unchecking hides the overlay without discarding that
+    cache, so re-checking is instant, and the cache dies with the rest of `nwp_cache` on a page
+    refresh. Forecasted power output is the documented v1 ToDo (`PROJECT_SPEC.md` §8.4) — its
+    checkbox state is recorded here but never produces a map overlay; `_render_dashboard`
+    reads it back to show the placeholder message instead.
+
+    Args:
+        now: The resolved "now" (`clock.get_now`); part of the overlay cache key.
+        bounds: The current view's bounds — overlays are fetched over exactly this box.
+
+    Returns:
+        The `GridField` overlays to render this rerun, keyed by variable name; populated only
+        for currently-checked layers.
+    """
+    overlays: dict[str, GridField] = {}
+    with st.container(key="map-controls"):
+        wind_checked = st.checkbox(
+            config.MAP_CONTROLS_LABELS["wind"], value=state.get_layer("wind"), key="layer-wind"
+        )
+        if wind_checked != state.get_layer("wind"):
+            state.set_layer("wind", wind_checked)
+        if wind_checked:
+            overlays["wind"] = _get_cached_grid(now, bounds, "wind")
+            st.caption(config.MAP_LAYER_SIMULATED_CAPTION)
+
+        temperature_checked = st.checkbox(
+            config.MAP_CONTROLS_LABELS["temperature"],
+            value=state.get_layer("temperature"),
+            key="layer-temperature",
+        )
+        if temperature_checked != state.get_layer("temperature"):
+            state.set_layer("temperature", temperature_checked)
+        if temperature_checked:
+            overlays["temperature"] = _get_cached_grid(now, bounds, "temperature")
+            st.caption(config.MAP_LAYER_SIMULATED_CAPTION)
+
+        forecast_checked = st.checkbox(
+            config.MAP_CONTROLS_LABELS["forecast"],
+            value=state.get_layer("forecast"),
+            key="layer-forecast",
+        )
+        if forecast_checked != state.get_layer("forecast"):
+            state.set_layer("forecast", forecast_checked)
+    return overlays
+
+
+def _get_cached_grid(
+    now: datetime, bounds: Bounds, variable: Literal["wind", "temperature"]
+) -> GridField:
+    """Fetch one variable's `GridField` over `bounds`, or return the refresh-scoped cached copy.
+
+    Args:
+        now: The resolved "now" (`clock.get_now`); part of the cache key, so the grid refreshes
+            whenever the dataset's own "now" moves rather than on real wall-clock time.
+        bounds: The current view's bounds; part of the cache key, so drilling from the fleet
+            into a farm fetches a new, farm-scoped grid instead of reusing the fleet's.
+        variable: `"wind"` or `"temperature"`.
+
+    Returns:
+        The `GridField`, from `state.nwp_cache` if a prior rerun already fetched this exact
+        `(variable, bounds, now)` combination, or freshly fetched (and cached) otherwise.
+    """
+    cache_key = (
+        f"grid:{variable}:{bounds.lat_min:.4f},{bounds.lat_max:.4f},"
+        f"{bounds.lon_min:.4f},{bounds.lon_max:.4f}:{now.isoformat()}"
+    )
+    cached = state.get_nwp_cached(cache_key)
+    if isinstance(cached, GridField):
+        return cached
+    grid = nwp.get_provider().grid(bounds, variable, now)
+    state.set_nwp_cached(cache_key, grid)
+    return grid
+
+
 def _render_map(con: duckdb.DuckDBPyConnection, settings: config.Settings, now: datetime) -> None:
     """Render the fleet map and its Reset View button (`PROJECT_SPEC.md` §8, §8.5).
 
@@ -105,6 +184,8 @@ def _render_map(con: duckdb.DuckDBPyConnection, settings: config.Settings, now: 
         st.info("No farms to display.")
         return
 
+    overlays = _render_map_controls(now, bounds)
+
     padding = layout.viewport_padding(state.get_is_mobile())
     fleet_map = map_view.build_map(
         farm_rows,
@@ -114,7 +195,7 @@ def _render_map(con: duckdb.DuckDBPyConnection, settings: config.Settings, now: 
         selected_farm_id,
         state.get_selected_turbine_id(),
         padding,
-        {},
+        overlays,
     )
 
     # Restricting `returned_objects` to just the click-related keys is required: st_folium's
@@ -155,14 +236,20 @@ def _render_dashboard(
         settings: Runtime settings (staleness threshold).
         now: The resolved "now" (`clock.get_now`).
     """
+    if state.get_layer("forecast"):
+        # ToDo placeholder only (PROJECT_SPEC.md §8.4): no download, model, or spinner — just
+        # this message, and nothing added to the map.
+        st.info(config.FORECAST_TODO_MESSAGE)
+
+    level = state.get_level()
     selected_farm_id = state.get_selected_farm_id()
-    if state.get_level() == Level.FLEET or selected_farm_id is None:
+    if level == Level.FLEET or selected_farm_id is None:
         fleet_dashboard.render(con, settings, now)
         return
-    # The Turbine Dashboard (IMPLEMENTATION_PLAN.md Phase 13) does not exist yet; selecting a
-    # turbine still leaves the parent farm selected (state.select_turbine), so the Farm
-    # Dashboard is the correct, non-crashing render target for both FARM and TURBINE levels
-    # until Phase 13 adds the turbine-specific view.
+    selected_turbine_id = state.get_selected_turbine_id()
+    if level == Level.TURBINE and selected_turbine_id is not None:
+        turbine_dashboard.render(con, settings, now, selected_turbine_id)
+        return
     farm_dashboard.render(con, settings, now, selected_farm_id)
 
 

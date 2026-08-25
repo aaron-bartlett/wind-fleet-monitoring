@@ -10,6 +10,7 @@ invoked.
 
 import branca.colormap as bcm
 import folium
+from folium.raster_layers import ImageOverlay
 
 import config
 from src.domain.aggregates import FarmMapRow
@@ -39,10 +40,8 @@ def build_map(
     """Build the Folium map for the current drill-down level.
 
     Renders the fleet (farm-dot) layer always, plus the turbine layer when `level` is `FARM`
-    or `TURBINE` (`PROJECT_SPEC.md` §8.2-8.3). `overlays` is part of the full map-building
-    contract (wind/temperature grid overlays: `IMPLEMENTATION_PLAN.md` Phase 14) and is
-    accepted here so this signature does not change again, but is not rendered yet —
-    referencing it below documents that explicitly rather than silently dropping it.
+    or `TURBINE` (`PROJECT_SPEC.md` §8.2-8.3), plus any checked wind/temperature grid overlays
+    (`PROJECT_SPEC.md` §8.4).
 
     Args:
         farm_rows: One marker's worth of data per farm, from `aggregates.build_farm_map_rows`.
@@ -55,15 +54,16 @@ def build_map(
         selected_turbine_id: The selected turbine, if any, drawn larger/thicker to stand out.
         padding: `(padding_top_left, padding_bottom_right)` pixel pairs for `fit_bounds`, so
             no marker is solved into the region the dashboard panel covers.
-        overlays: Reserved for the wind/temperature grid overlays; unused here.
+        overlays: The currently-checked wind/temperature `GridField`s, keyed by variable name
+            (`app.py`'s layer checkboxes); absent keys simply render nothing.
 
     Returns:
         A `folium.Map` with the fleet layer (and turbine layer, when applicable) added and
         bounds fit.
     """
-    # Not yet rendered this phase (see docstring); referenced so intent is explicit rather than
-    # a silently-dropped parameter.
-    del selected_farm_id, overlays
+    # Not read at this drill level (see docstring); referenced so intent is explicit rather
+    # than a silently-dropped parameter.
+    del selected_farm_id
 
     fleet_map = folium.Map(tiles="CartoDB positron", zoom_control=True)
     padding_top_left, padding_bottom_right = padding
@@ -88,6 +88,11 @@ def build_map(
             selected = turbine.turbine_id == selected_turbine_id
             _add_turbine_marker(turbines_layer, turbine, result, selected=selected)
         turbines_layer.add_to(fleet_map)
+
+    if "wind" in overlays:
+        _add_wind_overlay(fleet_map, overlays["wind"])
+    if "temperature" in overlays:
+        _add_temperature_overlay(fleet_map, overlays["temperature"])
 
     return fleet_map
 
@@ -170,6 +175,58 @@ def _add_turbine_marker(
         tooltip=f"{turbine.turbine_id} — {result.status.value}",
         popup=folium.Popup(f"{_TURBINE_POPUP_PREFIX}{turbine.turbine_id}", parse_html=False),
     ).add_to(turbines_layer)
+
+
+def _add_wind_overlay(fleet_map: folium.Map, grid: GridField) -> None:
+    """Render a wind-speed `GridField` (`PROJECT_SPEC.md` §8.4).
+
+    SPEC-GAP: `IMPLEMENTATION_PLAN.md` Phase 14 names `folium.plugins.HeatMap` for this
+    overlay, but that class's constructor ships with no type annotations in the pinned
+    `folium~=0.18` release. `CLAUDE.md` §2.5's required mypy config makes `src/domain`/
+    `src/data` strict via a per-module `strict = true` override — which, per a documented
+    mypy limitation, is not actually module-scoped and instead enables `disallow_untyped_calls`
+    for the whole project, flagging that constructor call everywhere. Rendered instead as a
+    second `ImageOverlay` (`_add_grid_image_overlay`, shared with the temperature overlay
+    below): still a smoothed, colored intensity surface — a "HeatMap-style representation" as
+    the plan describes it — while keeping every call in this module fully typed, without
+    weakening the project's required strict config or adding a `# type: ignore`.
+    """
+    _add_grid_image_overlay(fleet_map, grid)
+
+
+def _add_temperature_overlay(fleet_map: folium.Map, grid: GridField) -> None:
+    """Render a temperature `GridField` as a `folium.raster_layers.ImageOverlay` (`PROJECT_SPEC.md` §8.4)."""
+    _add_grid_image_overlay(fleet_map, grid)
+
+
+def _add_grid_image_overlay(fleet_map: folium.Map, grid: GridField) -> None:
+    """Paint one `GridField` (wind speed or temperature) onto the map as a colored image.
+
+    One pixel per grid cell, colored by `config.GRID_OVERLAY_COLORMAP_STOPS` scaled to this
+    grid's own min/max — `branca`/`folium` apply the colormap callable to each raw cell value
+    directly rather than a pre-normalized one, so `vmin`/`vmax` must be the data's actual range
+    for the ramp to span it correctly.
+    """
+    value_min = float(grid.values.min())
+    value_max = float(grid.values.max())
+    if value_min == value_max:
+        # A perfectly uniform grid would make LinearColormap divide by zero; widen the range
+        # by an arbitrary epsilon rather than special-casing the render path.
+        value_max = value_min + 1e-6
+    colormap = bcm.LinearColormap(
+        config.GRID_OVERLAY_COLORMAP_STOPS, vmin=value_min, vmax=value_max
+    )
+    image_bounds = [
+        [float(grid.lats.min()), float(grid.lons.min())],
+        [float(grid.lats.max()), float(grid.lons.max())],
+    ]
+    ImageOverlay(
+        image=grid.values,
+        bounds=image_bounds,
+        origin="lower",
+        colormap=colormap,
+        opacity=config.MAP_LAYER_OVERLAY_OPACITY,
+    ).add_to(fleet_map)
 
 
 def extract_clicked_id(map_return: dict[str, object] | None) -> tuple[str, str] | None:

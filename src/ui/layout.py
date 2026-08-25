@@ -55,14 +55,21 @@ div.block-container {{
     to {{ transform: translateY(0); }}
 }}
 
-/* Reserved for later phases (PROJECT_SPEC.md §8.4 layer checkboxes, §8.5 Reset button): map
-   overlay widgets anchor to these classes instead of raw `position: fixed`, so they stay
-   clear of the dashboard panel on both form factors with no further CSS changes. */
-.map-overlay-top-right {{
+/* `.map-overlay-top-right` is the reserved hook from Phase 9; `.st-key-map-controls` is the
+   actual selector Streamlit emits for `st.container(key="map-controls")` (Phase 14's Wind /
+   Temperature / Forecast checkboxes, PROJECT_SPEC.md §8.4). Both carry the same rule so
+   either usage works, mirroring `.map-overlay-reset` / `.st-key-reset-view` below. The opaque
+   background keeps the checkbox labels readable over the map tiles underneath. */
+.map-overlay-top-right,
+.st-key-map-controls {{
     position: fixed;
     top: 12px;
     right: 12px;
     z-index: 1000;
+    background: rgba(255, 255, 255, 0.92);
+    padding: 8px 12px;
+    border-radius: 8px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
 }}
 
 /* `.map-overlay-reset` is the reserved hook from the class comment above; `.st-key-reset-view`

@@ -215,6 +215,43 @@ def test_get_scatter_data_rejects_unknown_metric(db_con: duckdb.DuckDBPyConnecti
 
 
 # --------------------------------------------------------------------------------------
+# get_scatter_sample_size — the pre-sample row count get_scatter_data down-samples from
+# --------------------------------------------------------------------------------------
+
+
+def test_get_scatter_sample_size_matches_unsampled_row_count(
+    db_con: duckdb.DuckDBPyConnection,
+) -> None:
+    kwargs = {
+        "turbine_id": "TURB001",
+        "x_metric": "wind_speed_ms",
+        "y_metric": "power_output_kw",
+        "start": None,
+        "end": datetime(2026, 1, 1, 0, 55, tzinfo=UTC),
+    }
+    total = queries.get_scatter_sample_size(db_con, **kwargs)
+    # 12 raw TURB001 rows in this window, minus the fixture's one duplicate (turbine_id,
+    # timestamp) — deduped on ingest, keeping the later received_at — leaves 11 with both
+    # metrics non-NULL. Independent of any max_points a caller later down-samples to.
+    assert total == 11
+
+    down_sampled = queries.get_scatter_data(db_con, **kwargs, max_points=5)
+    assert len(down_sampled) < total  # confirms down-sampling actually occurred
+
+
+def test_get_scatter_sample_size_rejects_unknown_metric(db_con: duckdb.DuckDBPyConnection) -> None:
+    with pytest.raises(QueryError):
+        queries.get_scatter_sample_size(
+            db_con,
+            turbine_id="TURB001",
+            x_metric="wind_speed_ms",
+            y_metric="not_a_real_metric",
+            start=None,
+            end=datetime(2026, 1, 1, 0, 55, tzinfo=UTC),
+        )
+
+
+# --------------------------------------------------------------------------------------
 # Bounds
 # --------------------------------------------------------------------------------------
 
