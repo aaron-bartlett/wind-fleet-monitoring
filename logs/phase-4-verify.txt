@@ -1,0 +1,10 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.11.8, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/aaron/Documents/NextEra-Technical/Software_Take_Home_Exercise/wind-fleet-monitor
+configfile: pyproject.toml
+plugins: cov-6.3.0, anyio-4.14.2
+collected 19 items
+
+tests/test_queries.py ...................                                [100%]
+
+============================== 19 passed in 0.89s ==============================
