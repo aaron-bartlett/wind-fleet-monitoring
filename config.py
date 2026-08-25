@@ -225,6 +225,24 @@ ZERO_SPAN_PAD_DEG = 0.05  # Bounds.expanded() fallback when all points share a c
 DESKTOP_PANEL_PX = 480
 MOBILE_PANEL_PX = 260
 
+# SPEC-GAP: `st_folium`'s `height` parameter is a fixed pixel int (streamlit-folium has no
+# `vh`/percentage support), so "the map fills the viewport" (PROJECT_SPEC.md §8.1) is
+# approximated with the same fixed-conservative-estimate approach as DESKTOP_PANEL_PX /
+# MOBILE_PANEL_PX above, rather than JS measurement. See PROJECT_SPEC.md §8.1; src/ui/map_view.py.
+MAP_HEIGHT_PX = 900
+
+# Turbine layer markers (PROJECT_SPEC.md §8.3) — discrete health-colored dots, shown at farm/
+# turbine level. The selected turbine renders larger and thicker so it stands out among siblings.
+TURBINE_MARKER_RADIUS_PX = 8
+TURBINE_MARKER_WEIGHT_PX = 1
+TURBINE_MARKER_FILL_OPACITY = 0.9
+TURBINE_SELECTED_RADIUS_PX = 11
+TURBINE_SELECTED_WEIGHT_PX = 3
+
+# The parent farm dot stays visible but dimmed once a farm's turbine layer is showing
+# (PROJECT_SPEC.md §8.3), so it reads as context rather than a competing focal point.
+FARM_MARKER_DIMMED_OPACITY = 0.4
+
 # 16-point compass abbreviations, indexed by 22.5°-wide sector (0 = N, 4 = E, ...).
 COMPASS_POINTS: tuple[str, ...] = (
     "N",
@@ -288,3 +306,19 @@ WIND_ROSE_CURRENT_COLOR = "#1565C0"
 
 # Below this many (x, y) pairs an OLS fit is not meaningful; render "Insufficient data" instead.
 SCATTER_MIN_REGRESSION_POINTS = 3
+
+# --------------------------------------------------------------------------------------
+# Fleet Dashboard (src/ui/dashboards/fleet.py, PROJECT_SPEC.md §10.2)
+# --------------------------------------------------------------------------------------
+
+# Current Power Output switches from "X,XXX kW" to megawatts above this many kW.
+MW_DISPLAY_THRESHOLD_KW = 10_000.0
+KW_PER_MW = 1000.0
+
+# --------------------------------------------------------------------------------------
+# Farm Dashboard (src/ui/dashboards/farm.py, PROJECT_SPEC.md §10.3)
+# --------------------------------------------------------------------------------------
+
+# Air temperature is displayed in °C with °F alongside it: F = C * FAHRENHEIT_SCALE + FAHRENHEIT_OFFSET.
+FAHRENHEIT_SCALE = 9 / 5
+FAHRENHEIT_OFFSET = 32.0

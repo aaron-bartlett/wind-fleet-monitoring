@@ -65,7 +65,12 @@ div.block-container {{
     z-index: 1000;
 }}
 
-.map-overlay-reset {{
+/* `.map-overlay-reset` is the reserved hook from the class comment above; `.st-key-reset-view`
+   is the actual selector Streamlit emits for `st.container(key="reset-view")` (Phase 11's
+   mechanism for pinning the Reset View button — there is no way to attach an arbitrary literal
+   class to a native widget). Both carry the same rule so either usage works. */
+.map-overlay-reset,
+.st-key-reset-view {{
     position: fixed;
     right: 12px;
     bottom: 12px;
@@ -83,7 +88,8 @@ div.block-container {{
         animation-name: slide-in-bottom;
     }}
 
-    .map-overlay-reset {{
+    .map-overlay-reset,
+    .st-key-reset-view {{
         bottom: calc(var(--panel-mobile-height) + 12px);
     }}
 }}
