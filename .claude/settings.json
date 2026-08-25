@@ -1,0 +1,57 @@
+{
+  "$comment": "Wind Fleet Monitor — project settings. Logs every Bash tool call and its result to logs/tool-calls.jsonl so the AI Usage Summary deliverable can be reconstructed from evidence rather than memory. Verify the hook fires with: claude -p 'run: echo hello' --verbose",
+  "permissions": {
+    "allow": [
+      "Read",
+      "Write",
+      "Edit",
+      "Glob",
+      "Grep",
+      "Bash(python3 *)",
+      "Bash(python *)",
+      "Bash(pip install *)",
+      "Bash(pytest *)",
+      "Bash(ruff *)",
+      "Bash(mypy *)",
+      "Bash(mkdir *)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(grep *)",
+      "Bash(touch *)",
+      "Bash(streamlit run *)",
+      "Bash(curl -sf http://localhost:8501/*)"
+    ],
+    "deny": [
+      "Bash(rm -rf *)",
+      "Bash(git push *)",
+      "Write(data/*.csv)",
+      "Edit(data/*.csv)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mkdir -p logs && tee -a logs/tool-calls.jsonl > /dev/null",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mkdir -p logs && tee -a logs/tool-results.jsonl > /dev/null",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

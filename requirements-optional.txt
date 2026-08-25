@@ -1,0 +1,1 @@
+# herbie-data~=2024.8  # NOT installed in v1 — HRRRProvider is a NotImplementedError skeleton

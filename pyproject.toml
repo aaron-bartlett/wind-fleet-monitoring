@@ -1,0 +1,31 @@
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# Ruff >=0.9 formats fenced Python code blocks inside Markdown by default. The
+# `~=0.8` pin (CLAUDE.md §2.3) is a two-segment compatible-release specifier, which
+# under PEP 440 only fixes the major version (resolves to any 0.x release, not 0.8.x),
+# so newer ruff versions are installed. Excluding docs keeps ruff scoped to Python
+# source, which is its only intended target in this project.
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "ARG", "PTH", "RUF"]
+ignore = ["E501"]  # formatter owns line length
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = ["src.domain.*", "src.data.*"]
+strict = true
+
+[[tool.mypy.overrides]]
+module = ["folium.*", "streamlit_folium.*", "branca.*", "timezonefinder.*", "plotly.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
