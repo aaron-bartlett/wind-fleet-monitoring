@@ -1,1 +1,3 @@
-# herbie-data~=2024.8  # NOT installed in v1 — HRRRProvider is a NotImplementedError skeleton
+# The HRRR NWP dependencies (herbie-data, xarray, cfgrib, eccodes) moved into requirements.txt
+# when the real HRRRProvider was implemented — NWP_PROVIDER=hrrr now works from a plain
+# `pip install -r requirements.txt`. Nothing optional remains.

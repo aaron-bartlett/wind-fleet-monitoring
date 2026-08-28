@@ -17,7 +17,7 @@ import config
 from src.data import db
 from src.domain import aggregates, clock, geo, nwp
 from src.domain.models import Bounds, GridField, HealthResult, Level, Turbine
-from src.errors import WindFleetError
+from src.errors import NWPUnavailableError, WindFleetError
 from src.ui import layout, map_view, state
 from src.ui.dashboards import farm as farm_dashboard
 from src.ui.dashboards import fleet as fleet_dashboard
@@ -109,14 +109,19 @@ def _cached_turbine_map_rows(
 
 
 def _render_map_controls(now: datetime, bounds: Bounds) -> dict[str, GridField]:
-    """Render the top-right Wind / Temperature / Forecast layer checkboxes (`PROJECT_SPEC.md` §8.4).
+    """Render the Wind / Temperature / Forecast layer toggles (`PROJECT_SPEC.md` §8.4).
 
-    Checking Wind or Temperature lazily fetches a synthetic grid from the NWP provider and
-    caches it via `state.set_nwp_cached`; unchecking hides the overlay without discarding that
-    cache, so re-checking is instant, and the cache dies with the rest of `nwp_cache` on a page
-    refresh. Forecasted power output is the documented v1 ToDo (`PROJECT_SPEC.md` §8.4) — its
-    checkbox state is recorded here but never produces a map overlay; `_render_dashboard`
-    reads it back to show the placeholder message instead.
+    The three checkboxes sit in one horizontal row across the top of the map (styled by
+    `layout.inject_css`), with no backing panel.
+
+    Checking Wind or Temperature lazily fetches a grid from the NWP provider and caches it via
+    `state.set_nwp_cached`; unchecking hides the overlay without discarding that cache, so
+    re-checking is instant, and the cache dies with the rest of `nwp_cache` on a page refresh.
+    If the provider cannot serve the request (`NWPUnavailableError` — e.g. real HRRR has no run
+    for this time, or the view is outside CONUS), the overlay is skipped and a warning shown in
+    its place, never a crash (`CLAUDE.md` §5.3). Forecasted power output is the documented v1
+    ToDo (`PROJECT_SPEC.md` §8.4) — its checkbox state is recorded here but never produces a
+    map overlay; `_render_dashboard` reads it back to show the placeholder message instead.
 
     Args:
         now: The resolved "now" (`clock.get_now`); part of the overlay cache key.
@@ -124,9 +129,10 @@ def _render_map_controls(now: datetime, bounds: Bounds) -> dict[str, GridField]:
 
     Returns:
         The `GridField` overlays to render this rerun, keyed by variable name; populated only
-        for currently-checked layers.
+        for currently-checked layers that the provider could serve.
     """
     overlays: dict[str, GridField] = {}
+    unavailable = False
     with st.container(key="map-controls"):
         wind_checked = st.checkbox(
             config.MAP_CONTROLS_LABELS["wind"], value=state.get_layer("wind"), key="layer-wind"
@@ -134,8 +140,11 @@ def _render_map_controls(now: datetime, bounds: Bounds) -> dict[str, GridField]:
         if wind_checked != state.get_layer("wind"):
             state.set_layer("wind", wind_checked)
         if wind_checked:
-            overlays["wind"] = _get_cached_grid(now, bounds, "wind")
-            st.caption(config.MAP_LAYER_SIMULATED_CAPTION)
+            grid = _get_cached_grid(now, bounds, "wind")
+            if grid is None:
+                unavailable = True
+            else:
+                overlays["wind"] = grid
 
         temperature_checked = st.checkbox(
             config.MAP_CONTROLS_LABELS["temperature"],
@@ -145,8 +154,11 @@ def _render_map_controls(now: datetime, bounds: Bounds) -> dict[str, GridField]:
         if temperature_checked != state.get_layer("temperature"):
             state.set_layer("temperature", temperature_checked)
         if temperature_checked:
-            overlays["temperature"] = _get_cached_grid(now, bounds, "temperature")
-            st.caption(config.MAP_LAYER_SIMULATED_CAPTION)
+            grid = _get_cached_grid(now, bounds, "temperature")
+            if grid is None:
+                unavailable = True
+            else:
+                overlays["temperature"] = grid
 
         forecast_checked = st.checkbox(
             config.MAP_CONTROLS_LABELS["forecast"],
@@ -155,12 +167,37 @@ def _render_map_controls(now: datetime, bounds: Bounds) -> dict[str, GridField]:
         )
         if forecast_checked != state.get_layer("forecast"):
             state.set_layer("forecast", forecast_checked)
+
+        # One shared note for whichever overlays are active — the controls are now a single
+        # horizontal row, so repeating the caption under each checkbox would break it up.
+        if overlays:
+            st.caption(_overlay_caption(overlays))
+        if unavailable:
+            st.warning(config.NWP_UNAVAILABLE_MESSAGE)
     return overlays
+
+
+def _overlay_caption(overlays: dict[str, GridField]) -> str:
+    """Caption for the active overlays: the "Simulated" note for the stub, else the HRRR run.
+
+    Names each active layer's AGL level so 80 m wind and 2 m temperature are never conflated.
+    """
+    grid = next(iter(overlays.values()))
+    if grid.is_simulated:
+        return config.MAP_LAYER_SIMULATED_CAPTION
+    levels = []
+    if "wind" in overlays:
+        levels.append(f"{config.HRRR_WIND_LEVEL_LABEL} wind")
+    if "temperature" in overlays:
+        levels.append(f"{config.HRRR_TEMP_LEVEL_LABEL} temp")
+    return (
+        f"{config.HRRR_SOURCE_LABEL} {' / '.join(levels)} · valid {grid.valid_time:%Y-%m-%d %H:%MZ}"
+    )
 
 
 def _get_cached_grid(
     now: datetime, bounds: Bounds, variable: Literal["wind", "temperature"]
-) -> GridField:
+) -> GridField | None:
     """Fetch one variable's `GridField` over `bounds`, or return the refresh-scoped cached copy.
 
     Args:
@@ -171,8 +208,9 @@ def _get_cached_grid(
         variable: `"wind"` or `"temperature"`.
 
     Returns:
-        The `GridField`, from `state.nwp_cache` if a prior rerun already fetched this exact
-        `(variable, bounds, now)` combination, or freshly fetched (and cached) otherwise.
+        The `GridField` (from `state.nwp_cache` on a repeat request, else freshly fetched and
+        cached), or `None` if the provider raised `NWPUnavailableError`. Failures are not
+        cached, so a transient outage recovers on the next rerun.
     """
     cache_key = (
         f"grid:{variable}:{bounds.lat_min:.4f},{bounds.lat_max:.4f},"
@@ -181,7 +219,11 @@ def _get_cached_grid(
     cached = state.get_nwp_cached(cache_key)
     if isinstance(cached, GridField):
         return cached
-    grid = nwp.get_provider().grid(bounds, variable, now)
+    try:
+        grid = nwp.get_provider().grid(bounds, variable, now)
+    except NWPUnavailableError:
+        logger.warning("NWP grid unavailable for %s over %s", variable, bounds)
+        return None
     state.set_nwp_cached(cache_key, grid)
     return grid
 
@@ -291,6 +333,7 @@ def main() -> None:
         now = clock.get_now(con, settings)
 
         layout.inject_css()
+        layout.inject_dashboard_resize()
         state.init_state()
         map_container, dashboard_container = layout.render_shell()
 

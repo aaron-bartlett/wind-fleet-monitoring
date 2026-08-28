@@ -7,6 +7,7 @@ window — every figure is either already computed by `aggregates.build_farm_sum
 produced in SQL/`nwp` by their respective modules.
 """
 
+import logging
 from datetime import datetime
 from typing import cast
 
@@ -19,7 +20,10 @@ from src.data import queries
 from src.domain import aggregates, clock
 from src.domain.models import Farm, HealthStatus, Level, PointForecast, compass_point
 from src.domain.nwp import get_provider
+from src.errors import NWPUnavailableError
 from src.ui import charts, state
+
+logger = logging.getLogger(__name__)
 
 
 def render(con: duckdb.DuckDBPyConnection, settings: Settings, now: datetime, farm_id: str) -> None:
@@ -73,10 +77,19 @@ def render(con: duckdb.DuckDBPyConnection, settings: Settings, now: datetime, fa
 
 
 def _render_weather(now: datetime, farm: Farm) -> None:
-    """Render the wind/temperature weather block (`PROJECT_SPEC.md` §10.3)."""
-    current, history = _get_weather(now, farm)
+    """Render the wind/temperature weather block (`PROJECT_SPEC.md` §10.3).
 
+    Shows `config.NWP_UNAVAILABLE_MESSAGE` in place of the block when the provider cannot serve
+    the farm (`NWPUnavailableError` — real HRRR outside CONUS or with no run for this time),
+    never raising (`CLAUDE.md` §5.3).
+    """
     st.markdown("**Current Weather**")
+    weather = _get_weather(now, farm)
+    if weather is None:
+        st.info(config.NWP_UNAVAILABLE_MESSAGE)
+        return
+
+    current, history = weather
     readout = f"{current.wind_speed_ms:.1f} m/s {compass_point(current.wind_direction_deg)}"
     st.write(readout)
     st.plotly_chart(
@@ -85,16 +98,29 @@ def _render_weather(now: datetime, farm: Farm) -> None:
         config={"displayModeBar": False},
     )
     st.write(f"Air Temperature: {_format_temp_c(current.air_temp_c)}")
+    st.caption(_weather_caption(current))
+
+
+def _weather_caption(current: PointForecast) -> str:
+    """The "Simulated" note for stub data, else the source, AGL levels, and valid time of HRRR."""
     if current.is_simulated:
-        st.caption("⚠ Simulated data — NWP provider not connected")
+        return config.WEATHER_SIMULATED_CAPTION
+    return (
+        f"{config.HRRR_SOURCE_LABEL} {config.HRRR_WIND_LEVEL_LABEL} wind / "
+        f"{config.HRRR_TEMP_LEVEL_LABEL} temp · valid {current.valid_time:%Y-%m-%d %H:%MZ}"
+    )
 
 
-def _get_weather(now: datetime, farm: Farm) -> tuple[PointForecast, list[PointForecast]]:
+def _get_weather(now: datetime, farm: Farm) -> tuple[PointForecast, list[PointForecast]] | None:
     """Fetch (and cache for this rerun cycle) the farm's current + previous-24h forecasts.
 
     Cached under `state.nwp_cache` keyed by farm and resolved time so repeated Streamlit
     reruns for the same "now" do not recompute or re-request the forecast
     (`IMPLEMENTATION_PLAN.md` Phase 12; `PROJECT_SPEC.md` §8.4's cache lifecycle).
+
+    Returns:
+        `(current, history)`, or `None` when the provider raised `NWPUnavailableError`.
+        Failures are not cached, so a transient outage recovers on the next rerun.
     """
     cache_key = f"farm:{farm.farm_id}:{now.isoformat()}"
     cached = state.get_nwp_cached(cache_key)
@@ -104,8 +130,12 @@ def _get_weather(now: datetime, farm: Farm) -> tuple[PointForecast, list[PointFo
     provider = get_provider()
     history_start = clock.window_start(now, "24h")
     assert history_start is not None  # "24h" always has a concrete window (config.TIME_WINDOWS)
-    current = provider.point_forecast(farm.latitude, farm.longitude, now)
-    history = provider.point_history(farm.latitude, farm.longitude, history_start, now)
+    try:
+        current = provider.point_forecast(farm.latitude, farm.longitude, now)
+        history = provider.point_history(farm.latitude, farm.longitude, history_start, now)
+    except NWPUnavailableError:
+        logger.warning("NWP forecast unavailable for farm %s", farm.farm_id)
+        return None
     state.set_nwp_cached(cache_key, (current, history))
     return current, history
 

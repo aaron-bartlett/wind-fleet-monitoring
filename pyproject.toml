@@ -34,7 +34,17 @@ strict = true
 # PROJECT_SPEC.md §2) ships no `py.typed` marker in this pin and CLAUDE.md §2.3 does not list
 # a `scipy-stubs` dev dependency, so it is treated the same as the other untyped third-party
 # UI dependencies already listed here (CLAUDE.md §3.3 escape hatch).
-module = ["folium.*", "streamlit_folium.*", "branca.*", "timezonefinder.*", "plotly.*", "scipy.*"]
+module = [
+    "folium.*",
+    "streamlit_folium.*",
+    "branca.*",
+    "timezonefinder.*",
+    "plotly.*",
+    "scipy.*",
+    # HRRR NWP stack imported by src/data/hrrr.py — no py.typed marker / stubs.
+    "herbie.*",
+    "xarray.*",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

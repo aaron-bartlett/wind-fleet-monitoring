@@ -111,10 +111,7 @@ def build_wind_rose(current: PointForecast, history: Sequence[PointForecast]) ->
     readout = f"{current.wind_speed_ms:.1f} m/s {compass_point(current.wind_direction_deg)}"
     fig.update_layout(
         title=readout,
-        polar={
-            "angularaxis": {"direction": "clockwise", "rotation": 90},
-            "radialaxis": {"title": {"text": "Wind Speed (m/s)"}},
-        },
+        polar={"angularaxis": {"direction": "clockwise", "rotation": 90}},
         template=config.PLOTLY_TEMPLATE,
         height=config.CHART_HEIGHT_PX,
         margin=config.CHART_MARGIN,
@@ -175,7 +172,11 @@ def build_scatter_with_regression(
 
     fig = go.Figure()
     fig.add_trace(go.Scattergl(x=x, y=y, mode="markers", name="Observations"))
-    fig.add_trace(go.Scatter(x=line_x, y=line_y, mode="lines", name="OLS fit"))
+    # Hidden until the operator clicks its legend entry — keeps the raw scatter uncluttered
+    # while the R² annotation still reports the fit quality up front.
+    fig.add_trace(
+        go.Scatter(x=line_x, y=line_y, mode="lines", name="OLS fit", visible="legendonly")
+    )
     fig.add_annotation(
         text=f"R² = {regression.rvalue**2:.3f}",
         xref="paper",

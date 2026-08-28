@@ -102,10 +102,10 @@ def ingest(con: duckdb.DuckDBPyConnection, settings: Settings) -> IngestSummary:
         _stage_telemetry(con, paths["telemetry.csv"])
 
         con.execute(
-            "CREATE TABLE farms AS SELECT farm_id, farm_name, latitude, longitude FROM stg_farms"
+            "CREATE OR REPLACE TABLE farms AS SELECT farm_id, farm_name, latitude, longitude FROM stg_farms"
         )
         con.execute(
-            "CREATE TABLE turbines AS "
+            "CREATE OR REPLACE TABLE turbines AS "
             "SELECT turbine_id, farm_id, latitude, longitude FROM stg_turbines"
         )
         _cast_telemetry_timestamps(con)
@@ -245,7 +245,7 @@ def _cast_telemetry_timestamps(con: duckdb.DuckDBPyConnection) -> None:
     """
     try:
         con.execute(
-            "CREATE TABLE stg_telemetry_typed AS "
+            "CREATE OR REPLACE TABLE stg_telemetry_typed AS "
             "SELECT turbine_id, farm_id, "
             "strptime(timestamp, ?) AT TIME ZONE 'UTC' AS timestamp, "
             "strptime(received_at, ?) AT TIME ZONE 'UTC' AS received_at, "
@@ -269,7 +269,7 @@ def _dedup_telemetry(con: duckdb.DuckDBPyConnection) -> int:
     before = con.execute("SELECT COUNT(*) FROM stg_telemetry_typed").fetchone()
     assert before is not None
     con.execute(
-        "CREATE TABLE telemetry AS "
+        "CREATE OR REPLACE TABLE telemetry AS "
         "SELECT turbine_id, farm_id, timestamp, received_at, "
         "power_output_kw, wind_speed_ms, rotor_rpm, blade_pitch_deg, gearbox_temp_c "
         "FROM ("
@@ -300,7 +300,7 @@ def _create_latest_telemetry_view(con: duckdb.DuckDBPyConnection) -> None:
 
 
 def _write_ingest_meta(con: duckdb.DuckDBPyConnection, paths: dict[str, Path]) -> None:
-    con.execute("CREATE TABLE ingest_meta (key VARCHAR, value VARCHAR)")
+    con.execute("CREATE OR REPLACE TABLE ingest_meta (key VARCHAR, value VARCHAR)")
     rows: list[tuple[str, str]] = []
     for name, path in paths.items():
         stat = path.stat()

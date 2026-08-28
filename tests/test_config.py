@@ -57,6 +57,27 @@ def test_every_metric_has_threshold_and_label() -> None:
         assert metric in config.METRIC_LABELS, f"{metric} missing from METRIC_LABELS"
 
 
+def test_dashboard_metric_reflow_constants_are_ordered() -> None:
+    # 1-up must kick in at a strictly narrower panel than 2-up, or the reflow steps invert;
+    # the value clamp needs a real interval for `clamp(min, …, max)` to behave.
+    assert 0 < config.DASHBOARD_METRIC_1UP_MAX_PX < config.DASHBOARD_METRIC_2UP_MAX_PX
+    assert config.DASHBOARD_METRIC_VALUE_MIN_REM < config.DASHBOARD_METRIC_VALUE_MAX_REM
+    # The wide layout must keep Streamlit's stock metric-value size (2.25rem) as the ceiling.
+    assert config.DASHBOARD_METRIC_VALUE_MAX_REM == 2.25
+
+
+def test_hrrr_constants_are_sane() -> None:
+    assert config.HRRR_GRID_RESOLUTION > 1
+    assert config.HRRR_MAX_NATIVE_CELLS > config.HRRR_GRID_RESOLUTION**2
+    assert isinstance(config.HRRR_CACHE_DIR, Path)
+    assert config.HRRR_NEAREST_MAX_KM > 0
+    lat_min, lat_max, lon_min, lon_max = config.HRRR_DOMAIN_LATLON_BBOX
+    assert lat_min < lat_max
+    assert lon_min < lon_max
+    assert config.HRRR_PRODUCT == "sfc"
+    assert config.HRRR_FXX == 0
+
+
 @pytest.mark.parametrize(
     ("wind_speed_ms", "expected_kw"),
     [

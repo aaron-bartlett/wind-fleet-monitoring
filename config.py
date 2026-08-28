@@ -202,7 +202,8 @@ HEALTH_COLORS: dict[str, str] = {
     "Error": "#757575",
 }
 
-FARM_SCORE_COLORMAP_STOPS = ["#C62828", "#ED6C02", "#2E7D32"]
+# FARM_SCORE_COLORMAP_STOPS = ["#C62828", "#ED6C02", "#2E7D32"]
+FARM_SCORE_COLORMAP_STOPS = ["#C62828", "#DDCB25", "#2E7D32"]
 
 FARM_ALERT_ON_ANY_CRITICAL = True
 FARM_ALERT_ERROR_FRACTION = 0.20
@@ -217,6 +218,25 @@ FARM_SCORE_WEIGHTS: dict[str, float] = {"HEALTHY": 1.0, "WARNING": 0.6, "CRITICA
 BOUNDS_EXPANSION = 1.10
 SINGLE_POINT_ZOOM = 13
 DASHBOARD_FRACTION = 1 / 3
+
+# The desktop dashboard panel is drag-resizable along its right edge (src/ui/layout.py). The
+# chosen width is stored as a fraction of viewport width, clamped to this range and persisted
+# in the browser's localStorage so it survives Streamlit reruns.
+DASHBOARD_MIN_FRACTION = 0.25
+DASHBOARD_MAX_FRACTION = 0.50
+
+# The dashboard's `st.metric` row (four widgets on the Fleet Dashboard, two on the Farm
+# Dashboard) reflows as the panel is drag-resized: 4-up above `_2UP_MAX_PX` of panel content
+# width, 2-up at/below it, 1-up at/below `_1UP_MAX_PX`. Driven by a CSS `@container` query on
+# the panel (src/ui/layout.py) — a viewport media query cannot see the drag handle, which only
+# changes the panel's own width. Below the wide layout the metric value also scales down within
+# `[_VALUE_MIN_REM, _VALUE_MAX_REM]` (max = Streamlit's 2.25rem default, so the wide view is
+# unchanged) and the label wraps instead of truncating to an ellipsis.
+DASHBOARD_METRIC_2UP_MAX_PX = 520
+DASHBOARD_METRIC_1UP_MAX_PX = 360
+DASHBOARD_METRIC_VALUE_MIN_REM = 1.35
+DASHBOARD_METRIC_VALUE_MAX_REM = 2.25
+
 MOBILE_BREAKPOINT_PX = 768
 ZERO_SPAN_PAD_DEG = 0.05  # Bounds.expanded() fallback when all points share a coordinate
 
@@ -305,10 +325,55 @@ HISTORY_WINDOW_LABELS: dict[str, str] = {
 # NWP provider (PROJECT_SPEC.md §9)
 # --------------------------------------------------------------------------------------
 
-# "stub" (default, v1) or "hrrr" (ToDo skeleton, raises NotImplementedError) — see src/domain/nwp.py.
+# "stub" (default) or "hrrr" (real HRRR via herbie-data — see src/data/hrrr.py). Selected by
+# nwp.get_provider(); anything else raises ConfigError.
 NWP_PROVIDER: str = os.environ.get("NWP_PROVIDER", "stub")
 NWP_GRID_RESOLUTION = 12  # points per axis for StubNWPProvider.grid()
 NWP_STUB_SEED = 20260101
+
+# Shown in place of a wind rose / grid overlay when the provider cannot serve a request
+# (out of domain, no archived HRRR run for the resolved time, offline) — CLAUDE.md §5.3.
+NWP_UNAVAILABLE_MESSAGE = "Weather data unavailable for this time or area."
+
+# --------------------------------------------------------------------------------------
+# HRRR provider (src/data/hrrr.py, src/domain/nwp.py::HRRRProvider)
+# --------------------------------------------------------------------------------------
+# SPEC-GAP: PROJECT_SPEC.md §9 specifies HRRRProvider as a NotImplementedError skeleton and
+# CLAUDE.md §5.8 says not to build it; implemented anyway by explicit request. The prompt asked
+# for "100 m" winds/temperature. HRRR's `sfc` product publishes wind (U/V) at 80 m above
+# ground — its highest AGL wind level, used as the hub-height proxy — but temperature only at
+# 2 m above ground, so the temperature overlay is the standard 2 m screen-level field. Both
+# heights are labelled honestly in the UI. See README §16.
+
+HRRR_MODEL = "hrrr"
+HRRR_PRODUCT = "sfc"  # 2D surface file; carries UGRD/VGRD at 80 m and TMP at 2 m above ground
+HRRR_FXX = 0  # analysis (F00) of the cycle at/before valid_time
+HRRR_WIND_LEVEL = "80 m above ground"
+HRRR_TEMP_LEVEL = "2 m above ground"
+
+# Regular lat/lon mesh the native HRRR grid is resampled onto for GridField / the ImageOverlay.
+# Finer than NWP_GRID_RESOLUTION because real data over a single farm is otherwise flat.
+HRRR_GRID_RESOLUTION = 48
+
+# Above this many native points inside the view box, stride before scipy.griddata — the fleet
+# view box is nearly CONUS-scale (~15 deg lat x 31 deg lon).
+HRRR_MAX_NATIVE_CELLS = 200_000
+
+# Herbie's download cache (GRIB subsets + .idx). Git-ignored; created on first HRRR fetch.
+HRRR_CACHE_DIR = Path(os.environ.get("HRRR_CACHE_DIR", "data/hrrr-cache"))
+
+# Fast reject before any network call: (lat_min, lat_max, lon_min, lon_max) roughly bounding
+# the HRRR CONUS domain. A plain tuple, not a Bounds — config must not import src.domain.models.
+HRRR_DOMAIN_LATLON_BBOX = (21.0, 53.0, -134.0, -60.0)
+
+# A point farther than this from its nearest native HRRR cell is treated as out of domain.
+HRRR_NEAREST_MAX_KM = 5.0
+
+# Caption stem shown beneath a real (non-simulated) overlay / weather block, plus the
+# per-variable AGL level so wind (80 m) and temperature (2 m) are never conflated.
+HRRR_SOURCE_LABEL = "HRRR"
+HRRR_WIND_LEVEL_LABEL = "80 m AGL"
+HRRR_TEMP_LEVEL_LABEL = "2 m AGL"
 
 # --------------------------------------------------------------------------------------
 # Charts (src/ui/charts.py)
@@ -355,6 +420,10 @@ MAP_LAYER_OVERLAY_OPACITY = 0.5
 GRID_OVERLAY_COLORMAP_STOPS = ["#cde2fb", "#6da7ec", "#256abf", "#0d366b"]
 
 MAP_LAYER_SIMULATED_CAPTION = "Simulated data — NWP provider not connected"
+
+# The same note for the farm/turbine dashboard weather blocks (src/ui/dashboards/*.py); the
+# leading glyph matches the other dashboard cautions.
+WEATHER_SIMULATED_CAPTION = "⚠ Simulated data — NWP provider not connected"
 
 MAP_CONTROLS_LABELS: dict[str, str] = {
     "wind": "Wind streams",

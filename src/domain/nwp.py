@@ -1,14 +1,22 @@
-"""NWP (weather) provider interface + stub, since telemetry has no wind-direction or air-temp
-column (`PROJECT_SPEC.md` §9).
+"""NWP (weather) provider interface, deterministic stub, and the real HRRR-backed provider.
 
-Domain layer (`CLAUDE.md` §4.1): pure functions and deterministic pseudo-randomness, no I/O,
-no Streamlit. `StubNWPProvider` is what v1 actually wires up (`config.NWP_PROVIDER`); it must be
-fully deterministic given `(lat, lon, valid_time)` because Streamlit reruns constantly and a
-flickering wind rose would be a visible bug. `HRRRProvider` is a documented ToDo skeleton —
-every method raises `NotImplementedError`, and per `CLAUDE.md` §2.2 `herbie-data` is never
-imported at module scope (it is not installed in v1; see `requirements-optional.txt`).
+`StubNWPProvider` is the default (`config.NWP_PROVIDER`); it stays in the domain layer
+(`CLAUDE.md` §4.1) as pure deterministic pseudo-randomness — identical `(lat, lon, valid_time)`
+must give identical output or the wind rose flickers on every Streamlit rerun.
+
+`HRRRProvider` fetches live HRRR 80 m winds and 2 m temperature. All of its network + GRIB +
+heavy scientific-stack work lives in `src/data/hrrr.py` (imported inside the method bodies, so
+stub-mode startup never loads `eccodes`); this class only resolves cycles, checks the CONUS
+domain, and shapes the result into `PointForecast` / `GridField`. It raises
+`NWPUnavailableError` (a `WindFleetError`) whenever it cannot serve a request; callers in the
+UI catch that and render a message rather than letting it stop the app (`CLAUDE.md` §5.3).
+
+SPEC-GAP: `PROJECT_SPEC.md` §9 / `CLAUDE.md` §5.8 specify `HRRRProvider` as a ToDo skeleton;
+built by explicit request. The prompt asked for 100 m; HRRR `sfc` gives wind at 80 m AGL (the
+hub-height proxy) and temperature only at 2 m AGL.
 """
 
+import logging
 import math
 from datetime import UTC, datetime, timedelta
 from typing import Literal, Protocol
@@ -17,7 +25,9 @@ import numpy as np
 
 import config
 from src.domain.models import Bounds, GridField, PointForecast
-from src.errors import ConfigError
+from src.errors import ConfigError, NWPUnavailableError
+
+logger = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------------------------
 # Interface
@@ -193,65 +203,121 @@ def _simulated_air_temp_c(lat: float, hour: float, rng: np.random.Generator) -> 
 
 
 # --------------------------------------------------------------------------------------
-# HRRRProvider — ToDo skeleton (PROJECT_SPEC.md §9); not built in v1
+# HRRRProvider — real HRRR via herbie-data (SPEC-GAP: PROJECT_SPEC.md §9 marks this a ToDo)
 # --------------------------------------------------------------------------------------
 
 
 class HRRRProvider:
-    """Real HRRR-backed NWP provider — documented skeleton only, not implemented in v1.
+    """Real HRRR-backed NWP provider (`NWP_PROVIDER=hrrr`).
 
-    Every method below raises `NotImplementedError`. When this provider is wired up, the
-    implementation must: use `herbie-data` to fetch the HRRR run covering the requested time
-    (imported inside the method body, never at module scope — `CLAUDE.md` §2.2, since
-    `herbie-data` is not installed per `requirements-optional.txt`); pick the grid point
-    nearest the **farm** coordinate, since all turbines in a farm share the farm's conditions
-    (`PROJECT_SPEC.md` §9); derive wind speed and direction from the 80 m U/V wind components;
-    and take the 2 m temperature field. HRRR covers CONUS only, so a farm outside that domain
-    must raise `NWPUnavailableError` rather than returning a value or crashing.
+    Wind speed/direction come from the HRRR 80 m U/V components and temperature from the 2 m
+    field (`PROJECT_SPEC.md` §9 asks for "the farm's conditions" — a farm box spans only a few
+    HRRR cells, so the nearest cell and a farm-scoped grid agree). The fetch, decode, and
+    regrid all happen in `src/data/hrrr.py`; this class owns only cycle resolution, the CONUS
+    check, and result shaping.
+
+    Every method raises `NWPUnavailableError` when the point/box is outside the HRRR domain or
+    no run can be loaded for the resolved cycle (missing from the archive, offline, transient).
     """
 
     name: str = "hrrr"
 
     def point_forecast(self, lat: float, lon: float, valid_time: datetime) -> PointForecast:
-        """Fetch a single-point HRRR forecast nearest `(lat, lon)`, valid at `valid_time`.
+        """Return HRRR conditions at the native cell nearest `(lat, lon)` for `valid_time`.
 
         Raises:
-            NotImplementedError: Always — this is a v1 ToDo skeleton (`PROJECT_SPEC.md` §9).
+            NWPUnavailableError: `(lat, lon)` is off the HRRR grid, or the covering run is
+                unavailable.
         """
-        raise NotImplementedError(
-            "HRRRProvider.point_forecast is not implemented in v1; see PROJECT_SPEC.md §9. "
-            "Intended implementation: fetch HRRR via herbie-data, pick the nearest grid "
-            "point to the farm coordinate, derive wind from 80 m U/V and temperature from "
-            "the 2 m field; raise NWPUnavailableError for farms outside the CONUS domain."
+        from src.data import hrrr
+
+        if not hrrr.bbox_intersects_domain(lat, lat, lon, lon):
+            raise NWPUnavailableError(f"({lat:.3f}, {lon:.3f}) is outside the HRRR domain.")
+
+        cycle = hrrr.cycle_for(valid_time)
+        wind = hrrr.fetch_field(cycle, "wind")
+        temperature = hrrr.fetch_field(cycle, "temperature")
+        speed_ms, direction_deg = hrrr.nearest_sample(wind, lat, lon)
+        temp_c, _ = hrrr.nearest_sample(temperature, lat, lon)
+        if direction_deg is None:  # a wind field always carries direction — defensive
+            raise NWPUnavailableError(f"HRRR wind direction missing for {cycle:%Y-%m-%d %HZ}.")
+        return PointForecast(
+            valid_time=cycle,
+            wind_speed_ms=speed_ms,
+            wind_direction_deg=direction_deg,
+            air_temp_c=temp_c,
+            is_simulated=False,
         )
 
     def point_history(
         self, lat: float, lon: float, start: datetime, end: datetime, step_hours: int = 1
     ) -> list[PointForecast]:
-        """Fetch a series of single-point HRRR forecasts across `[start, end]`.
+        """Return one HRRR `PointForecast` per `step_hours` cycle across `[start, end]`.
+
+        A cycle missing from the archive is skipped (logged), so the wind rose still renders
+        from whatever runs exist.
 
         Raises:
-            NotImplementedError: Always — this is a v1 ToDo skeleton (`PROJECT_SPEC.md` §9).
+            NWPUnavailableError: `(lat, lon)` is off the HRRR grid, or *no* run in the window
+                could be loaded.
         """
-        raise NotImplementedError(
-            "HRRRProvider.point_history is not implemented in v1; see PROJECT_SPEC.md §9. "
-            "Intended implementation: repeat point_forecast's HRRR fetch for each run between "
-            "start and end, stepping by step_hours."
-        )
+        from src.data import hrrr
+
+        if step_hours <= 0:
+            raise ValueError(f"step_hours must be positive, got {step_hours}")
+        if not hrrr.bbox_intersects_domain(lat, lat, lon, lon):
+            raise NWPUnavailableError(f"({lat:.3f}, {lon:.3f}) is outside the HRRR domain.")
+
+        step = timedelta(hours=step_hours)
+        cycle = hrrr.cycle_for(start)
+        last_cycle = hrrr.cycle_for(end)
+        forecasts: list[PointForecast] = []
+        while cycle <= last_cycle:
+            try:
+                forecasts.append(self.point_forecast(lat, lon, cycle))
+            except NWPUnavailableError:
+                logger.warning("Skipping unavailable HRRR cycle %s", cycle)
+            cycle += step
+
+        if not forecasts:
+            raise NWPUnavailableError(
+                f"No HRRR runs available between {start:%Y-%m-%d %HZ} and {end:%Y-%m-%d %HZ}."
+            )
+        return forecasts
 
     def grid(
         self, bounds: Bounds, variable: Literal["wind", "temperature"], valid_time: datetime
     ) -> GridField:
-        """Fetch a gridded HRRR field over `bounds` at `valid_time`.
+        """Return an HRRR field over `bounds`, resampled to a regular lat/lon mesh.
 
         Raises:
-            NotImplementedError: Always — this is a v1 ToDo skeleton (`PROJECT_SPEC.md` §9).
+            NWPUnavailableError: `bounds` does not overlap the HRRR domain, or the covering
+                run is unavailable.
         """
-        raise NotImplementedError(
-            "HRRRProvider.grid is not implemented in v1; see PROJECT_SPEC.md §9. Intended "
-            "implementation: fetch the HRRR grid via herbie-data, subset it to bounds, and "
-            "derive wind speed or 2 m temperature per variable; raise NWPUnavailableError "
-            "when bounds fall outside the CONUS domain."
+        from src.data import hrrr
+
+        if not hrrr.bbox_intersects_domain(
+            bounds.lat_min, bounds.lat_max, bounds.lon_min, bounds.lon_max
+        ):
+            raise NWPUnavailableError("The requested area is outside the HRRR domain.")
+
+        cycle = hrrr.cycle_for(valid_time)
+        native = hrrr.fetch_field(cycle, variable)
+        lats, lons, values = hrrr.regrid_to_mesh(
+            native,
+            bounds.lat_min,
+            bounds.lat_max,
+            bounds.lon_min,
+            bounds.lon_max,
+            config.HRRR_GRID_RESOLUTION,
+        )
+        return GridField(
+            lats=lats,
+            lons=lons,
+            values=values,
+            variable=variable,
+            valid_time=cycle,
+            is_simulated=False,
         )
 
 
