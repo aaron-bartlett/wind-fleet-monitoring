@@ -43,6 +43,11 @@ class Settings:
     duckdb_path: Path
     sim_now: datetime | None
     stale_after_minutes: int
+    # SPEC-GAP: NWP (weather) valid-time override, deliberately independent of `sim_now` and
+    # the dataset's own "now". Lets HRRR overlays target a cycle the archive actually has
+    # while the dashboards keep running against the telemetry clock (see README §16). `None`
+    # -> NWP requests use the resolved "now" (`clock.get_nwp_time`).
+    nwp_valid_time: datetime | None = None
 
 
 def load_settings() -> Settings:
@@ -52,14 +57,16 @@ def load_settings() -> Settings:
         A populated, immutable `Settings`.
 
     Raises:
-        ConfigError: `SIM_NOW` or `STALE_AFTER_MINUTES` is set but cannot be parsed.
+        ConfigError: `SIM_NOW`, `NWP_VALID_TIME`, or `STALE_AFTER_MINUTES` is set but cannot
+            be parsed.
     """
     data_dir = Path(os.environ.get("DATA_DIR", "data"))
 
     duckdb_path_str = os.environ.get("DUCKDB_PATH")
     duckdb_path = Path(duckdb_path_str) if duckdb_path_str else data_dir / "fleet.duckdb"
 
-    sim_now = _parse_sim_now(os.environ.get("SIM_NOW"))
+    sim_now = _parse_utc_datetime(os.environ.get("SIM_NOW"), "SIM_NOW")
+    nwp_valid_time = _parse_utc_datetime(os.environ.get("NWP_VALID_TIME"), "NWP_VALID_TIME")
     stale_after_minutes = _parse_stale_after_minutes(os.environ.get("STALE_AFTER_MINUTES"))
 
     return Settings(
@@ -67,19 +74,31 @@ def load_settings() -> Settings:
         duckdb_path=duckdb_path,
         sim_now=sim_now,
         stale_after_minutes=stale_after_minutes,
+        nwp_valid_time=nwp_valid_time,
     )
 
 
-def _parse_sim_now(raw: str | None) -> datetime | None:
-    """Parse the `SIM_NOW` environment variable to a tz-aware UTC datetime, if set."""
+def _parse_utc_datetime(raw: str | None, var_name: str) -> datetime | None:
+    """Parse an ISO-8601 environment variable to a tz-aware UTC datetime, if set.
+
+    Args:
+        raw: The raw environment value, or `None` when unset.
+        var_name: The variable's name, used only in error messages.
+
+    Returns:
+        The value as a UTC datetime, or `None` when `raw` is `None`.
+
+    Raises:
+        ConfigError: `raw` is set but is not a valid ISO-8601 datetime, or lacks a timezone.
+    """
     if raw is None:
         return None
     try:
         parsed = datetime.fromisoformat(raw)
     except ValueError as exc:
-        raise ConfigError(f"SIM_NOW={raw!r} is not a valid ISO-8601 datetime.") from exc
+        raise ConfigError(f"{var_name}={raw!r} is not a valid ISO-8601 datetime.") from exc
     if parsed.tzinfo is None:
-        raise ConfigError(f"SIM_NOW={raw!r} must include a UTC offset or 'Z' suffix.")
+        raise ConfigError(f"{var_name}={raw!r} must include a UTC offset or 'Z' suffix.")
     return parsed.astimezone(UTC)
 
 
@@ -237,6 +256,12 @@ DASHBOARD_METRIC_1UP_MAX_PX = 360
 DASHBOARD_METRIC_VALUE_MIN_REM = 1.35
 DASHBOARD_METRIC_VALUE_MAX_REM = 2.25
 
+# Inner buffer on the dashboard panel so its text and full-width plots do not crowd the panel
+# edges (src/ui/layout.py). Slightly wider on the left, where the content starts; a lighter
+# right buffer keeps plots clear of the panel scrollbar.
+DASHBOARD_PANEL_PAD_LEFT_REM = 0.9
+DASHBOARD_PANEL_PAD_RIGHT_REM = 0.5
+
 MOBILE_BREAKPOINT_PX = 768
 ZERO_SPAN_PAD_DEG = 0.05  # Bounds.expanded() fallback when all points share a coordinate
 
@@ -325,8 +350,9 @@ HISTORY_WINDOW_LABELS: dict[str, str] = {
 # NWP provider (PROJECT_SPEC.md §9)
 # --------------------------------------------------------------------------------------
 
-# "stub" (default) or "hrrr" (real HRRR via herbie-data — see src/data/hrrr.py). Selected by
-# nwp.get_provider(); anything else raises ConfigError.
+# "stub" is the only provider wired up in this version. Live HRRR fetching is disabled:
+# nwp.get_provider() rejects "hrrr" (and anything else) with a ConfigError. The HRRRProvider
+# class and src/data/hrrr.py stay in the tree for a future release (README §16).
 NWP_PROVIDER: str = os.environ.get("NWP_PROVIDER", "stub")
 NWP_GRID_RESOLUTION = 12  # points per axis for StubNWPProvider.grid()
 NWP_STUB_SEED = 20260101
@@ -424,6 +450,14 @@ MAP_LAYER_SIMULATED_CAPTION = "Simulated data — NWP provider not connected"
 # The same note for the farm/turbine dashboard weather blocks (src/ui/dashboards/*.py); the
 # leading glyph matches the other dashboard cautions.
 WEATHER_SIMULATED_CAPTION = "⚠ Simulated data — NWP provider not connected"
+
+# Shown under the Farm/Turbine wind rose: this version has no live NWP provider, so the rose's
+# petal lengths are real telemetry wind speed but its angles (and the air-temp line) are a
+# deterministic synthetic stand-in — telemetry carries no wind-direction channel.
+WIND_ROSE_TELEMETRY_CAPTION = (
+    "Petal length = measured wind speed (telemetry); direction and air temperature are "
+    "theoretical — no direction or ambient-temperature sensor."
+)
 
 MAP_CONTROLS_LABELS: dict[str, str] = {
     "wind": "Wind streams",

@@ -1,0 +1,20 @@
+# Keep the build context small. data/*.csv is intentionally NOT ignored — the app ingests it.
+.git
+.venv
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.DS_Store
+
+tests/
+logs/
+data/ARCHIVE/
+data/*.duckdb
+data/*.duckdb.wal
+data/hrrr-cache/
+*.grib2
+*.grib2.idx
+
+.streamlit/secrets.toml

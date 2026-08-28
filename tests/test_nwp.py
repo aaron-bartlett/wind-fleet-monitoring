@@ -8,14 +8,20 @@ import math
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
+import duckdb
 import numpy as np
 import pytest
 
 import config
 from src.data import hrrr
 from src.data.hrrr import NativeField
-from src.domain.models import Bounds
-from src.domain.nwp import HRRRProvider, StubNWPProvider, get_provider
+from src.domain.models import Bounds, Farm
+from src.domain.nwp import (
+    HRRRProvider,
+    StubNWPProvider,
+    get_provider,
+    telemetry_wind_rose,
+)
 from src.errors import ConfigError, NWPUnavailableError
 
 FARM01_LAT, FARM01_LON = 41.25, -96.53
@@ -249,10 +255,11 @@ def test_get_provider_stub_default(monkeypatch: pytest.MonkeyPatch) -> None:
     assert isinstance(get_provider(), StubNWPProvider)
 
 
-def test_get_provider_hrrr(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_provider_hrrr_is_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(config, "NWP_PROVIDER", "hrrr")
 
-    assert isinstance(get_provider(), HRRRProvider)
+    with pytest.raises(ConfigError, match="disabled in this version"):
+        get_provider()
 
 
 def test_get_provider_unknown_raises_config_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -260,3 +267,50 @@ def test_get_provider_unknown_raises_config_error(monkeypatch: pytest.MonkeyPatc
 
     with pytest.raises(ConfigError, match="NWP_PROVIDER"):
         get_provider()
+
+
+# --------------------------------------------------------------------------------------
+# telemetry_wind_rose — measured speed, theoretical direction (this version's actual rose)
+# --------------------------------------------------------------------------------------
+
+_FARM01 = Farm(farm_id="FARM01", farm_name="Prairie Ridge", latitude=41.25, longitude=-96.53)
+_FARM03 = Farm(farm_id="FARM03", farm_name="Red Canyon", latitude=35.12, longitude=-106.55)
+_ROSE_NOW = datetime(2026, 1, 1, 1, 0, tzinfo=UTC)
+_ROSE_START = _ROSE_NOW - timedelta(hours=24)
+
+
+def test_telemetry_wind_rose_uses_measured_speed(db_con: duckdb.DuckDBPyConnection) -> None:
+    result = telemetry_wind_rose(db_con, _FARM01, _ROSE_NOW, _ROSE_START)
+    assert result is not None
+    current, history = result
+
+    # All fixture rows for FARM01 fall in the single 2026-01-01 00:00 hour bucket.
+    assert len(history) == 1
+    assert current is history[-1]
+
+    # Petal length is the farm's mean measured wind_speed_ms — cross-checked against a direct
+    # aggregate over the fixture (a different code path), and inside the fixture's 6.6..8.0 range.
+    expected = db_con.execute(
+        "SELECT avg(wind_speed_ms) FROM telemetry "
+        "WHERE farm_id = 'FARM01' AND wind_speed_ms IS NOT NULL"
+    ).fetchone()[0]
+    assert current.wind_speed_ms == pytest.approx(expected)
+    assert 6.6 <= current.wind_speed_ms <= 8.0
+
+    # Direction is synthetic but well-formed, and every petal is flagged simulated.
+    assert 0.0 <= current.wind_direction_deg < 360.0
+    assert all(f.is_simulated for f in history)
+    assert current.valid_time.tzinfo is not None
+
+
+def test_telemetry_wind_rose_direction_is_deterministic(db_con: duckdb.DuckDBPyConnection) -> None:
+    first = telemetry_wind_rose(db_con, _FARM01, _ROSE_NOW, _ROSE_START)
+    second = telemetry_wind_rose(db_con, _FARM01, _ROSE_NOW, _ROSE_START)
+    assert first is not None and second is not None
+    assert [f.wind_direction_deg for f in first[1]] == [f.wind_direction_deg for f in second[1]]
+
+
+def test_telemetry_wind_rose_none_without_wind_telemetry(
+    db_con: duckdb.DuckDBPyConnection,
+) -> None:
+    assert telemetry_wind_rose(db_con, _FARM03, _ROSE_NOW, _ROSE_START) is None

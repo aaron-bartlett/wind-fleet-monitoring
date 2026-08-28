@@ -1,15 +1,19 @@
-"""NWP (weather) provider interface, deterministic stub, and the real HRRR-backed provider.
+"""NWP (weather) provider interface, deterministic stub, telemetry wind rose, HRRR skeleton.
 
-`StubNWPProvider` is the default (`config.NWP_PROVIDER`); it stays in the domain layer
-(`CLAUDE.md` §4.1) as pure deterministic pseudo-randomness — identical `(lat, lon, valid_time)`
-must give identical output or the wind rose flickers on every Streamlit rerun.
+`StubNWPProvider` is the only provider wired up in this version (`config.NWP_PROVIDER`); it
+stays in the domain layer (`CLAUDE.md` §4.1) as pure deterministic pseudo-randomness —
+identical `(lat, lon, valid_time)` must give identical output or the wind rose flickers on
+every Streamlit rerun.
+
+`telemetry_wind_rose` is what the Farm/Turbine weather block actually calls: since this
+version ships no live NWP, the rose is drawn from real telemetry wind speed with a synthetic
+(theoretical) direction borrowed from the stub. See its docstring and README §16.
 
 `HRRRProvider` fetches live HRRR 80 m winds and 2 m temperature. All of its network + GRIB +
 heavy scientific-stack work lives in `src/data/hrrr.py` (imported inside the method bodies, so
 stub-mode startup never loads `eccodes`); this class only resolves cycles, checks the CONUS
-domain, and shapes the result into `PointForecast` / `GridField`. It raises
-`NWPUnavailableError` (a `WindFleetError`) whenever it cannot serve a request; callers in the
-UI catch that and render a message rather than letting it stop the app (`CLAUDE.md` §5.3).
+domain, and shapes the result into `PointForecast` / `GridField`. It is retained for a future
+release but is unreachable in this version — `get_provider` rejects `NWP_PROVIDER=hrrr`.
 
 SPEC-GAP: `PROJECT_SPEC.md` §9 / `CLAUDE.md` §5.8 specify `HRRRProvider` as a ToDo skeleton;
 built by explicit request. The prompt asked for 100 m; HRRR `sfc` gives wind at 80 m AGL (the
@@ -21,10 +25,13 @@ import math
 from datetime import UTC, datetime, timedelta
 from typing import Literal, Protocol
 
+import duckdb
 import numpy as np
+import pandas as pd
 
 import config
-from src.domain.models import Bounds, GridField, PointForecast
+from src.data import queries
+from src.domain.models import Bounds, Farm, GridField, PointForecast
 from src.errors import ConfigError, NWPUnavailableError
 
 logger = logging.getLogger(__name__)
@@ -203,6 +210,68 @@ def _simulated_air_temp_c(lat: float, hour: float, rng: np.random.Generator) -> 
 
 
 # --------------------------------------------------------------------------------------
+# Telemetry-backed wind rose — the Farm/Turbine weather block's actual data source in a
+# build with no live NWP provider.
+# --------------------------------------------------------------------------------------
+
+
+def telemetry_wind_rose(
+    con: duckdb.DuckDBPyConnection,
+    farm: Farm,
+    now: datetime,
+    history_start: datetime,
+) -> tuple[PointForecast, list[PointForecast]] | None:
+    """Build a wind rose from measured wind speed and a *theoretical* wind direction.
+
+    # SPEC-GAP: `PROJECT_SPEC.md` §7 — telemetry has no wind-direction channel, and §9's
+    # weather block is specified against the NWP provider. This version ships no live NWP
+    # (`get_provider` rejects `"hrrr"`), so the Farm/Turbine rose is drawn from telemetry
+    # instead: each petal's *length* is the farm's real hourly-mean `wind_speed_ms`, while its
+    # *angle* is the same deterministic synthetic bearing `StubNWPProvider` uses
+    # (`_simulated_wind_direction_deg`). Air temperature is likewise synthetic (no
+    # ambient-temp channel). Every returned `PointForecast` carries `is_simulated=True`; the UI
+    # caption (`config.WIND_ROSE_TELEMETRY_CAPTION`) states exactly which parts are real. See
+    # README §16.
+
+    Args:
+        con: Open DuckDB connection.
+        farm: The farm whose telemetry and coordinate drive the rose.
+        now: Window upper bound; the "current" petal is the most recent hour with data.
+        history_start: Window lower bound (typically ``now - 24h``).
+
+    Returns:
+        ``(current, history)`` — ``history`` is one `PointForecast` per hour that has
+        telemetry, ascending by time, and ``current`` is the last of them. ``None`` when the
+        farm has no non-null wind speed in ``[history_start, now]``.
+    """
+    df = queries.get_farm_wind_speed_series(
+        con,
+        farm_id=farm.farm_id,
+        start=history_start,
+        end=now,
+        max_points=config.MAX_TIMESERIES_POINTS,
+    )
+    if df.empty:
+        return None
+
+    forecasts: list[PointForecast] = []
+    for raw_time, raw_speed in zip(df["bucket_start"], df["wind_speed_ms"], strict=True):
+        valid_time = pd.Timestamp(raw_time).to_pydatetime()
+        hour = _fractional_hour_utc(valid_time)
+        rng = _seeded_rng(farm.latitude, farm.longitude, valid_time)
+        forecasts.append(
+            PointForecast(
+                valid_time=valid_time,
+                wind_speed_ms=float(raw_speed),
+                wind_direction_deg=_simulated_wind_direction_deg(farm.latitude, hour, rng),
+                air_temp_c=_simulated_air_temp_c(farm.latitude, hour, rng),
+                is_simulated=True,
+            )
+        )
+    return forecasts[-1], forecasts
+
+
+# --------------------------------------------------------------------------------------
 # HRRRProvider — real HRRR via herbie-data (SPEC-GAP: PROJECT_SPEC.md §9 marks this a ToDo)
 # --------------------------------------------------------------------------------------
 
@@ -329,14 +398,21 @@ class HRRRProvider:
 def get_provider() -> NWPProvider:
     """Return the configured `NWPProvider` (`config.NWP_PROVIDER`).
 
+    Only `StubNWPProvider` is available in this version. Live HRRR fetching is disabled, so
+    `NWP_PROVIDER=hrrr` is rejected rather than silently downloading; `HRRRProvider` and
+    `src/data/hrrr.py` are kept for a future release (README §16).
+
     Returns:
-        A `StubNWPProvider` for `"stub"`, or an `HRRRProvider` for `"hrrr"`.
+        A `StubNWPProvider`.
 
     Raises:
-        ConfigError: `config.NWP_PROVIDER` names neither `"stub"` nor `"hrrr"`.
+        ConfigError: `config.NWP_PROVIDER` is anything other than `"stub"` — including
+            `"hrrr"`, which is disabled in this version.
     """
     if config.NWP_PROVIDER == "stub":
         return StubNWPProvider()
     if config.NWP_PROVIDER == "hrrr":
-        return HRRRProvider()
-    raise ConfigError(f"Unknown NWP_PROVIDER {config.NWP_PROVIDER!r}; expected 'stub' or 'hrrr'.")
+        raise ConfigError(
+            "NWP_PROVIDER='hrrr' (live HRRR) is disabled in this version; use 'stub'."
+        )
+    raise ConfigError(f"Unknown NWP_PROVIDER {config.NWP_PROVIDER!r}; expected 'stub'.")

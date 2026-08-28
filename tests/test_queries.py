@@ -280,3 +280,51 @@ def test_get_fleet_bounds_contains_all_farms(db_con: duckdb.DuckDBPyConnection) 
     assert bounds.lat_max == pytest.approx(41.25)
     assert bounds.lon_min == pytest.approx(-106.55)
     assert bounds.lon_max == pytest.approx(-96.53)
+
+
+# --------------------------------------------------------------------------------------
+# Wind speed series (telemetry wind rose)
+# --------------------------------------------------------------------------------------
+
+_WINDOW = {
+    "start": datetime(2025, 12, 31, tzinfo=UTC),
+    "end": datetime(2026, 1, 2, tzinfo=UTC),
+    "max_points": 2000,
+}
+
+
+def test_get_farm_wind_speed_series_hourly_mean_matches_direct_aggregate(
+    db_con: duckdb.DuckDBPyConnection,
+) -> None:
+    df = queries.get_farm_wind_speed_series(db_con, farm_id="FARM01", **_WINDOW)
+
+    # Every fixture row for FARM01 is inside the 2026-01-01 00:00 hour.
+    assert list(df.columns) == ["bucket_start", "wind_speed_ms"]
+    assert len(df) == 1
+    assert df["bucket_start"].iloc[0] == datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
+
+    expected = db_con.execute(
+        "SELECT avg(wind_speed_ms) FROM telemetry "
+        "WHERE farm_id = 'FARM01' AND wind_speed_ms IS NOT NULL"
+    ).fetchone()[0]
+    assert df["wind_speed_ms"].iloc[0] == pytest.approx(expected)
+
+
+def test_get_farm_wind_speed_series_empty_for_farm_without_telemetry(
+    db_con: duckdb.DuckDBPyConnection,
+) -> None:
+    df = queries.get_farm_wind_speed_series(db_con, farm_id="FARM03", **_WINDOW)
+    assert df.empty
+
+
+def test_get_farm_wind_speed_series_rejects_result_over_max_points(
+    db_con: duckdb.DuckDBPyConnection,
+) -> None:
+    with pytest.raises(QueryError, match="exceeding max_points"):
+        queries.get_farm_wind_speed_series(
+            db_con,
+            farm_id="FARM01",
+            start=_WINDOW["start"],
+            end=_WINDOW["end"],
+            max_points=0,
+        )

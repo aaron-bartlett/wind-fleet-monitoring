@@ -366,6 +366,53 @@ def _resolve_min_timestamp(
     return value
 
 
+def get_farm_wind_speed_series(
+    con: duckdb.DuckDBPyConnection,
+    *,
+    farm_id: str,
+    start: datetime,
+    end: datetime,
+    max_points: int,
+) -> pd.DataFrame:
+    """Return hourly mean measured wind speed for one farm over ``[start, end]``.
+
+    Averages ``telemetry.wind_speed_ms`` across the farm's turbines into 1-hour buckets;
+    ``NULL`` speeds are excluded and empty hours are simply absent (the wind rose bins by
+    whatever hours have data, so no gap spine is needed). The ``INTERVAL '1 hour'`` literal is
+    a fixed constant, not caller input, so it needs no allowlist check.
+
+    Args:
+        con: Open DuckDB connection.
+        farm_id: The farm to aggregate.
+        start: Window start (inclusive).
+        end: Window end (inclusive).
+        max_points: Upper bound on returned rows.
+
+    Returns:
+        A DataFrame with columns ``bucket_start`` (tz-aware UTC) and ``wind_speed_ms``
+        (float), ascending by ``bucket_start``. Empty when the farm has no non-null wind
+        speed in the window.
+
+    Raises:
+        QueryError: the result would exceed ``max_points`` — the caller must narrow the
+            window rather than have the rose silently truncated.
+    """
+    sql = (
+        "SELECT time_bucket(INTERVAL '1 hour', timestamp) AS bucket_start, "
+        "avg(wind_speed_ms) AS wind_speed_ms "
+        "FROM telemetry "
+        "WHERE farm_id = ? AND timestamp >= ? AND timestamp <= ? AND wind_speed_ms IS NOT NULL "
+        "GROUP BY 1 ORDER BY 1"
+    )
+    df = _fetchdf(con, sql, [farm_id, start, end], "get_farm_wind_speed_series")
+    if len(df) > max_points:
+        raise QueryError(
+            f"get_farm_wind_speed_series: result has {len(df)} points, exceeding "
+            f"max_points={max_points}; narrow the window."
+        )
+    return df
+
+
 def get_total_energy_mwh(
     con: duckdb.DuckDBPyConnection, *, level: Level, entity_id: str | None
 ) -> float:

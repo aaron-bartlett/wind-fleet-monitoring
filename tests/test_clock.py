@@ -51,6 +51,32 @@ def test_get_now_falls_back_to_wall_clock_when_no_telemetry(fixtures_dir: Path) 
 
 
 # --------------------------------------------------------------------------------------
+# get_nwp_time
+# --------------------------------------------------------------------------------------
+
+
+def _settings(nwp_valid_time: datetime | None) -> Settings:
+    return Settings(
+        data_dir=Path("data"),
+        duckdb_path=Path(":memory:"),
+        sim_now=None,
+        stale_after_minutes=15,
+        nwp_valid_time=nwp_valid_time,
+    )
+
+
+def test_get_nwp_time_defaults_to_now_when_no_override() -> None:
+    now = datetime(2026, 1, 2, 23, 55, tzinfo=UTC)
+    assert clock.get_nwp_time(_settings(None), now) == now
+
+
+def test_get_nwp_time_honors_override_independent_of_now() -> None:
+    now = datetime(2026, 1, 2, 23, 55, tzinfo=UTC)
+    override = datetime(2026, 1, 2, 0, 0, tzinfo=UTC)
+    assert clock.get_nwp_time(_settings(override), now) == override
+
+
+# --------------------------------------------------------------------------------------
 # is_stale
 # --------------------------------------------------------------------------------------
 

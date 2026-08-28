@@ -41,6 +41,26 @@ def get_now(con: duckdb.DuckDBPyConnection, settings: Settings) -> datetime:
     return datetime.now(UTC)
 
 
+def get_nwp_time(settings: Settings, now: datetime) -> datetime:
+    """Resolve the valid-time for NWP (weather) requests.
+
+    # SPEC-GAP: kept separate from `get_now` so weather overlays can target a cycle the HRRR
+    # archive actually has (env `NWP_VALID_TIME`) while the dashboards stay on the dataset's
+    # own "now". The HRRR provider snaps this to the enclosing hourly cycle, so an exact
+    # match is not required. See README §16 / PROJECT_SPEC.md §9.
+
+    Args:
+        settings: Runtime settings; `nwp_valid_time` takes precedence when set.
+        now: The resolved "now" (`get_now`), used when no override is configured.
+
+    Returns:
+        `settings.nwp_valid_time` if set, else `now`. Always tz-aware.
+    """
+    if settings.nwp_valid_time is not None:
+        return settings.nwp_valid_time
+    return now
+
+
 def is_stale(record_timestamp: datetime, now: datetime, stale_after_minutes: int) -> bool:
     """Return whether a record is older than `stale_after_minutes` relative to `now`.
 

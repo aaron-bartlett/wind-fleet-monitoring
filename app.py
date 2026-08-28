@@ -108,7 +108,7 @@ def _cached_turbine_map_rows(
     return aggregates.build_turbine_map_rows(_con, _settings, now, farm_id)
 
 
-def _render_map_controls(now: datetime, bounds: Bounds) -> dict[str, GridField]:
+def _render_map_controls(nwp_now: datetime, bounds: Bounds) -> dict[str, GridField]:
     """Render the Wind / Temperature / Forecast layer toggles (`PROJECT_SPEC.md` §8.4).
 
     The three checkboxes sit in one horizontal row across the top of the map (styled by
@@ -124,7 +124,7 @@ def _render_map_controls(now: datetime, bounds: Bounds) -> dict[str, GridField]:
     map overlay; `_render_dashboard` reads it back to show the placeholder message instead.
 
     Args:
-        now: The resolved "now" (`clock.get_now`); part of the overlay cache key.
+        nwp_now: The NWP valid-time (`clock.get_nwp_time`); part of the overlay cache key.
         bounds: The current view's bounds — overlays are fetched over exactly this box.
 
     Returns:
@@ -140,7 +140,7 @@ def _render_map_controls(now: datetime, bounds: Bounds) -> dict[str, GridField]:
         if wind_checked != state.get_layer("wind"):
             state.set_layer("wind", wind_checked)
         if wind_checked:
-            grid = _get_cached_grid(now, bounds, "wind")
+            grid = _get_cached_grid(nwp_now, bounds, "wind")
             if grid is None:
                 unavailable = True
             else:
@@ -154,7 +154,7 @@ def _render_map_controls(now: datetime, bounds: Bounds) -> dict[str, GridField]:
         if temperature_checked != state.get_layer("temperature"):
             state.set_layer("temperature", temperature_checked)
         if temperature_checked:
-            grid = _get_cached_grid(now, bounds, "temperature")
+            grid = _get_cached_grid(nwp_now, bounds, "temperature")
             if grid is None:
                 unavailable = True
             else:
@@ -196,13 +196,14 @@ def _overlay_caption(overlays: dict[str, GridField]) -> str:
 
 
 def _get_cached_grid(
-    now: datetime, bounds: Bounds, variable: Literal["wind", "temperature"]
+    nwp_now: datetime, bounds: Bounds, variable: Literal["wind", "temperature"]
 ) -> GridField | None:
     """Fetch one variable's `GridField` over `bounds`, or return the refresh-scoped cached copy.
 
     Args:
-        now: The resolved "now" (`clock.get_now`); part of the cache key, so the grid refreshes
-            whenever the dataset's own "now" moves rather than on real wall-clock time.
+        nwp_now: The NWP valid-time (`clock.get_nwp_time`); part of the cache key, so the grid
+            refreshes whenever the dataset's "now" moves or the `NWP_VALID_TIME` override
+            changes, rather than on real wall-clock time.
         bounds: The current view's bounds; part of the cache key, so drilling from the fleet
             into a farm fetches a new, farm-scoped grid instead of reusing the fleet's.
         variable: `"wind"` or `"temperature"`.
@@ -214,13 +215,13 @@ def _get_cached_grid(
     """
     cache_key = (
         f"grid:{variable}:{bounds.lat_min:.4f},{bounds.lat_max:.4f},"
-        f"{bounds.lon_min:.4f},{bounds.lon_max:.4f}:{now.isoformat()}"
+        f"{bounds.lon_min:.4f},{bounds.lon_max:.4f}:{nwp_now.isoformat()}"
     )
     cached = state.get_nwp_cached(cache_key)
     if isinstance(cached, GridField):
         return cached
     try:
-        grid = nwp.get_provider().grid(bounds, variable, now)
+        grid = nwp.get_provider().grid(bounds, variable, nwp_now)
     except NWPUnavailableError:
         logger.warning("NWP grid unavailable for %s over %s", variable, bounds)
         return None
@@ -228,13 +229,16 @@ def _get_cached_grid(
     return grid
 
 
-def _render_map(con: duckdb.DuckDBPyConnection, settings: config.Settings, now: datetime) -> None:
+def _render_map(
+    con: duckdb.DuckDBPyConnection, settings: config.Settings, now: datetime, nwp_now: datetime
+) -> None:
     """Render the fleet map and its Reset View button (`PROJECT_SPEC.md` §8, §8.5).
 
     Args:
         con: Open DuckDB connection.
         settings: Runtime settings (staleness threshold).
-        now: The resolved "now" (`clock.get_now`).
+        now: The resolved "now" (`clock.get_now`) — drives the health/aggregate map rows.
+        nwp_now: The NWP valid-time (`clock.get_nwp_time`) — drives the weather overlays.
     """
     farm_rows = _cached_farm_map_rows(con, settings, now)
     level = state.get_level()
@@ -256,7 +260,7 @@ def _render_map(con: duckdb.DuckDBPyConnection, settings: config.Settings, now: 
         st.info("No farms to display.")
         return
 
-    overlays = _render_map_controls(now, bounds)
+    overlays = _render_map_controls(nwp_now, bounds)
 
     padding = layout.viewport_padding(state.get_is_mobile())
     fleet_map = map_view.build_map(
@@ -331,6 +335,7 @@ def main() -> None:
         settings = config.load_settings()
         con = get_connection()
         now = clock.get_now(con, settings)
+        nwp_now = clock.get_nwp_time(settings, now)
 
         layout.inject_css()
         layout.inject_dashboard_resize()
@@ -341,7 +346,7 @@ def main() -> None:
         _render_ingest_summary()
 
         with map_container:
-            _render_map(con, settings, now)
+            _render_map(con, settings, now, nwp_now)
         with dashboard_container:
             _render_dashboard(con, settings, now)
     except WindFleetError as exc:

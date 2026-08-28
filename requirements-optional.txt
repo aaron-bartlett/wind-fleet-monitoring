@@ -1,3 +1,12 @@
-# The HRRR NWP dependencies (herbie-data, xarray, cfgrib, eccodes) moved into requirements.txt
-# when the real HRRRProvider was implemented — NWP_PROVIDER=hrrr now works from a plain
-# `pip install -r requirements.txt`. Nothing optional remains.
+# Optional: real HRRR NWP provider (src/data/hrrr.py, src/domain/nwp.py::HRRRProvider).
+#
+# NOT installed in this version. Live NWP is disabled — nwp.get_provider() rejects
+# NWP_PROVIDER=hrrr, and the Farm/Turbine wind rose is drawn from telemetry instead
+# (nwp.telemetry_wind_rose). The HRRRProvider class and src/data/hrrr.py remain in the tree
+# for a future release; wiring them back up means reinstating these pins in requirements.txt
+# and removing the "hrrr" guard in nwp.get_provider(). See README §16.
+#
+#   herbie-data~=2024.8
+#   xarray~=2024.6
+#   cfgrib~=0.9
+#   eccodes~=2.38

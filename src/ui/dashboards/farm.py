@@ -17,16 +17,19 @@ import streamlit as st
 import config
 from config import Settings
 from src.data import queries
-from src.domain import aggregates, clock
+from src.domain import aggregates, clock, nwp
 from src.domain.models import Farm, HealthStatus, Level, PointForecast, compass_point
-from src.domain.nwp import get_provider
-from src.errors import NWPUnavailableError
 from src.ui import charts, state
 
 logger = logging.getLogger(__name__)
 
 
-def render(con: duckdb.DuckDBPyConnection, settings: Settings, now: datetime, farm_id: str) -> None:
+def render(
+    con: duckdb.DuckDBPyConnection,
+    settings: Settings,
+    now: datetime,
+    farm_id: str,
+) -> None:
     """Render the Farm Dashboard into the current Streamlit container.
 
     Args:
@@ -49,7 +52,7 @@ def render(con: duckdb.DuckDBPyConnection, settings: Settings, now: datetime, fa
     metric_cols[0].metric("Current Power Output", _format_power_kw(summary.current_power_kw))
     metric_cols[1].metric("Total Energy (MWh)", f"{summary.total_energy_mwh:,.1f}")
 
-    _render_weather(now, summary.farm)
+    _render_weather(con, now, summary.farm)
 
     st.markdown(f"**Turbines:** {summary.turbine_count}")
     if summary.turbine_count == 0:
@@ -76,15 +79,16 @@ def render(con: duckdb.DuckDBPyConnection, settings: Settings, now: datetime, fa
     )
 
 
-def _render_weather(now: datetime, farm: Farm) -> None:
+def _render_weather(con: duckdb.DuckDBPyConnection, now: datetime, farm: Farm) -> None:
     """Render the wind/temperature weather block (`PROJECT_SPEC.md` §10.3).
 
-    Shows `config.NWP_UNAVAILABLE_MESSAGE` in place of the block when the provider cannot serve
-    the farm (`NWPUnavailableError` — real HRRR outside CONUS or with no run for this time),
-    never raising (`CLAUDE.md` §5.3).
+    The wind rose is built from telemetry wind speed with a theoretical direction
+    (`nwp.telemetry_wind_rose` — this version has no live NWP). Shows
+    `config.NWP_UNAVAILABLE_MESSAGE` in place of the block when the farm has no wind telemetry
+    in the window, never raising (`CLAUDE.md` §5.3).
     """
     st.markdown("**Current Weather**")
-    weather = _get_weather(now, farm)
+    weather = _get_weather(con, now, farm)
     if weather is None:
         st.info(config.NWP_UNAVAILABLE_MESSAGE)
         return
@@ -98,46 +102,40 @@ def _render_weather(now: datetime, farm: Farm) -> None:
         config={"displayModeBar": False},
     )
     st.write(f"Air Temperature: {_format_temp_c(current.air_temp_c)}")
-    st.caption(_weather_caption(current))
+    st.caption(config.WIND_ROSE_TELEMETRY_CAPTION)
 
 
-def _weather_caption(current: PointForecast) -> str:
-    """The "Simulated" note for stub data, else the source, AGL levels, and valid time of HRRR."""
-    if current.is_simulated:
-        return config.WEATHER_SIMULATED_CAPTION
-    return (
-        f"{config.HRRR_SOURCE_LABEL} {config.HRRR_WIND_LEVEL_LABEL} wind / "
-        f"{config.HRRR_TEMP_LEVEL_LABEL} temp · valid {current.valid_time:%Y-%m-%d %H:%MZ}"
-    )
+def _get_weather(
+    con: duckdb.DuckDBPyConnection, now: datetime, farm: Farm
+) -> tuple[PointForecast, list[PointForecast]] | None:
+    """Build (and cache for this rerun cycle) the farm's telemetry wind rose.
 
+    Cached under `state.nwp_cache` keyed by farm and "now" so repeated Streamlit reruns for the
+    same time do not re-query (`IMPLEMENTATION_PLAN.md` Phase 12; `PROJECT_SPEC.md` §8.4's
+    cache lifecycle). The Turbine Dashboard reuses this exact key.
 
-def _get_weather(now: datetime, farm: Farm) -> tuple[PointForecast, list[PointForecast]] | None:
-    """Fetch (and cache for this rerun cycle) the farm's current + previous-24h forecasts.
-
-    Cached under `state.nwp_cache` keyed by farm and resolved time so repeated Streamlit
-    reruns for the same "now" do not recompute or re-request the forecast
-    (`IMPLEMENTATION_PLAN.md` Phase 12; `PROJECT_SPEC.md` §8.4's cache lifecycle).
+    Args:
+        con: Open DuckDB connection.
+        now: The resolved "now" (`clock.get_now`) — the rose covers the previous 24h ending here.
+        farm: The farm whose telemetry and coordinate drive the rose.
 
     Returns:
-        `(current, history)`, or `None` when the provider raised `NWPUnavailableError`.
-        Failures are not cached, so a transient outage recovers on the next rerun.
+        `(current, history)`, or `None` when the farm has no wind telemetry in the window.
+        A `None` is not cached, so it recovers once telemetry arrives.
     """
-    cache_key = f"farm:{farm.farm_id}:{now.isoformat()}"
+    cache_key = f"windrose:{farm.farm_id}:{now.isoformat()}"
     cached = state.get_nwp_cached(cache_key)
     if cached is not None:
         return cast("tuple[PointForecast, list[PointForecast]]", cached)
 
-    provider = get_provider()
     history_start = clock.window_start(now, "24h")
     assert history_start is not None  # "24h" always has a concrete window (config.TIME_WINDOWS)
-    try:
-        current = provider.point_forecast(farm.latitude, farm.longitude, now)
-        history = provider.point_history(farm.latitude, farm.longitude, history_start, now)
-    except NWPUnavailableError:
-        logger.warning("NWP forecast unavailable for farm %s", farm.farm_id)
+    rose = nwp.telemetry_wind_rose(con, farm, now, history_start)
+    if rose is None:
+        logger.warning("No wind telemetry for farm %s in the rose window", farm.farm_id)
         return None
-    state.set_nwp_cached(cache_key, (current, history))
-    return current, history
+    state.set_nwp_cached(cache_key, rose)
+    return rose
 
 
 def _render_status_counts(status_counts: dict[HealthStatus, int]) -> None:

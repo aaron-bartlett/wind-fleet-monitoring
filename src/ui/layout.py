@@ -29,6 +29,8 @@ _CSS = f"""
     --panel-mobile-height: {config.DASHBOARD_FRACTION * 100:.2f}vh;
     --metric-value-min: {config.DASHBOARD_METRIC_VALUE_MIN_REM}rem;
     --metric-value-max: {config.DASHBOARD_METRIC_VALUE_MAX_REM}rem;
+    --dash-pad-left: {config.DASHBOARD_PANEL_PAD_LEFT_REM}rem;
+    --dash-pad-right: {config.DASHBOARD_PANEL_PAD_RIGHT_REM}rem;
 }}
 
 /* Edge-to-edge map: remove Streamlit's default page padding and max-width. */
@@ -57,6 +59,12 @@ div.block-container {{
     width: clamp(var(--panel-min-width), var(--panel-desktop-width), var(--panel-max-width));
     height: 100vh;
     overflow-y: auto;
+    /* Small inner buffer so dashboard text and full-width plots don't crowd the panel edges
+       (config.DASHBOARD_PANEL_PAD_*). border-box keeps the padding inside the clamp() width,
+       so the panel's left edge and the drag handle's anchor are unchanged. */
+    padding-left: var(--dash-pad-left);
+    padding-right: var(--dash-pad-right);
+    box-sizing: border-box;
     background: #ffffff;
     box-shadow: 2px 0 8px rgba(0, 0, 0, 0.25);
     z-index: 900;

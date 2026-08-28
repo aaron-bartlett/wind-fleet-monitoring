@@ -13,6 +13,7 @@ def test_load_settings_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DATA_DIR", raising=False)
     monkeypatch.delenv("DUCKDB_PATH", raising=False)
     monkeypatch.delenv("SIM_NOW", raising=False)
+    monkeypatch.delenv("NWP_VALID_TIME", raising=False)
     monkeypatch.delenv("STALE_AFTER_MINUTES", raising=False)
 
     settings = config.load_settings()
@@ -20,6 +21,7 @@ def test_load_settings_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.data_dir == Path("data")
     assert settings.duckdb_path == Path("data/fleet.duckdb")
     assert settings.sim_now is None
+    assert settings.nwp_valid_time is None
     assert settings.stale_after_minutes == 15
 
 
@@ -39,6 +41,35 @@ def test_load_settings_sim_now_garbage_raises_config_error(
     monkeypatch.setenv("SIM_NOW", "garbage")
 
     with pytest.raises(ConfigError, match="SIM_NOW"):
+        config.load_settings()
+
+
+def test_load_settings_nwp_valid_time_parses_to_tz_aware_utc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Offset input is normalized to UTC (2026-01-02T00:00 -05:00 -> 05:00Z).
+    monkeypatch.setenv("NWP_VALID_TIME", "2026-01-02T00:00:00-05:00")
+
+    settings = config.load_settings()
+
+    assert settings.nwp_valid_time == datetime(2026, 1, 2, 5, 0, tzinfo=UTC)
+
+
+def test_load_settings_nwp_valid_time_garbage_raises_config_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NWP_VALID_TIME", "not-a-time")
+
+    with pytest.raises(ConfigError, match="NWP_VALID_TIME"):
+        config.load_settings()
+
+
+def test_load_settings_nwp_valid_time_without_tz_raises_config_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NWP_VALID_TIME", "2026-01-02T00:00:00")
+
+    with pytest.raises(ConfigError, match="must include a UTC offset"):
         config.load_settings()
 
 
